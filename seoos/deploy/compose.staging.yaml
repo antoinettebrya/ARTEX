@@ -82,7 +82,7 @@ services:
       api: { condition: service_healthy }
     ports: ["127.0.0.1:${ARTEX_WEB_PORT:-18889}:3000"]
     networks: [application]
-    tmpfs: [/tmp:mode=1777, /app/.next/cache:uid=1000,gid=1000,mode=0750]
+    tmpfs: ["/tmp:mode=1777", "/app/.next/cache:uid=1000,gid=1000,mode=0750"]
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/seo/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s

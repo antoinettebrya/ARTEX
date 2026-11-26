@@ -102,5 +102,16 @@ jobs:
       - name: Build standalone web container
         working-directory: web
         run: docker build --tag artex-seoos-web:ci .
+      - name: Start the isolated staging stack and check public-ready web
+        run: |
+          export ARTEX_API_IMAGE=artex-seoos:ci ARTEX_WORKER_IMAGE=artex-seoos:ci ARTEX_WEB_IMAGE=artex-seoos-web:ci
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)" SEOOS_API_TOKEN="$(openssl rand -hex 32)"
+          export SEOOS_ORGANIZATION_ID=5b8253a0-a0bc-4c19-ae3e-074845181f30 SEOOS_PROVIDER_KEY="$(openssl rand -base64 32)"
+          compose=(docker compose -p artex-staging-ci -f deploy/compose.staging.yaml)
+          trap '"${compose[@]}" down --volumes' EXIT
+          "${compose[@]}" up -d --wait postgres
+          "${compose[@]}" run --rm migrate
+          "${compose[@]}" up -d --wait --wait-timeout 90 api worker web
+          curl --fail --silent --show-error --max-time 8 http://127.0.0.1:18889/seo/login -o /dev/null
       - name: Exercise PDF and Chromium extraction inside the sandbox runtime
         run: bash scripts/test_extraction.sh
