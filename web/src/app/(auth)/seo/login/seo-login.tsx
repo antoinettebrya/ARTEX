@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage, seoRequest } from "@/lib/seo/client";
+import { SEO_HOME, safeSeoReturn } from "@/lib/seo/routes";
 
 export function SeoLogin() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export function SeoLogin() {
     setError("");
     try {
       await seoRequest<void>("/session", { method: "POST", body: { token } });
-      router.replace("/seo/sites");
+      router.replace(safeSeoReturn(new URLSearchParams(window.location.search).get("next")) ?? SEO_HOME);
     } catch (failure) {
       setError(errorMessage(failure));
       setPending(false);

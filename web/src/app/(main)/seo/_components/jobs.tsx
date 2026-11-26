@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
 
 import { Ban, FileText, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -15,7 +14,9 @@ import { isID, type Job, type Provider, type Site, seoRequest } from "@/lib/seo/
 import { contentJobLabels } from "@/lib/seo/content";
 import { executionJobLabels } from "@/lib/seo/execution";
 import { researchJobLabels } from "@/lib/seo/research";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "./context";
 import { useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
 import {
@@ -33,16 +34,22 @@ import {
   useSeoList,
 } from "./shared";
 
-const jobNames = {
+export const jobNames = {
   ...contentJobLabels,
   ...executionJobLabels,
   ...researchJobLabels,
   site_inventory: "站点资料快照",
   site_brief: "SEO 启动简报",
 } as const;
-const states = { queued: "排队中", running: "运行中", succeeded: "完成", failed: "失败", cancelled: "已取消" } as const;
+export const jobStates = {
+  queued: "排队中",
+  running: "运行中",
+  succeeded: "完成",
+  failed: "失败",
+  cancelled: "已取消",
+} as const;
 
-const tones = {
+export const jobTones = {
   queued: "outline",
   running: "outline",
   succeeded: "secondary",
@@ -116,20 +123,21 @@ function JobEditor({
 export function Jobs() {
   const { principal } = useSeoSession();
   const writable = principal.role !== "viewer";
-  const router = useRouter();
-  const site = useSearchParams().get("site") ?? "";
-  const editing = writable && isID(site);
+  const { params, siteID: site, href, update } = useSeoLocation();
+  const editing = writable && !!site && params.get("new") === "1";
+  const selectedJob = params.get("job");
+  const details = useSeoQuery<{ job: Job }>(isID(selectedJob) ? `/jobs/${selectedJob}` : null);
   const selected = useSeoQuery<{ site: Site }>(editing ? `/sites/${site}` : null);
   const providers = useSeoQuery<{ providers: Provider[] }>(editing ? "/providers?limit=200" : null);
   const list = useSeoList<Job>("jobs");
   const [result, setResult] = useState<Job>();
   const [cancel, setCancel] = useState<Job>();
 
-  const close = () => router.replace("/seo/jobs", { scroll: false });
+  const close = () => update({ new: null }, { replace: true });
 
   return (
     <PageFrame
-      title="任务"
+      title={seoRoutes.system.jobs.title}
       description="查看排队、执行结果和重试状态。"
       actions={
         <>
@@ -138,7 +146,7 @@ export function Jobs() {
           </Button>
           {writable && (
             <Button asChild variant="outline" size="sm">
-              <Link href="/seo/sites">
+              <Link href={href(seoRoutes.sites.list.path)}>
                 <Plus /> 从站点创建
               </Link>
             </Button>
@@ -149,6 +157,23 @@ export function Jobs() {
       {editing && [selected, providers].some((query) => query.loading) && <PageSkeleton />}
       {editing && selected.error !== undefined && <LoadError error={selected.error} retry={selected.refresh} />}
       {editing && providers.error !== undefined && <LoadError error={providers.error} retry={providers.refresh} />}
+      {details.loading && <PageSkeleton />}
+      {details.error !== undefined && <LoadError error={details.error} retry={details.refresh} />}
+      {details.data && (!site || details.data.job.site_id === site) && (
+        <RecordDetails
+          title={jobNames[details.data.job.kind]}
+          value={{
+            state: details.data.job.state,
+            attempts: details.data.job.attempts,
+            error: details.data.job.error_code,
+            result: details.data.job.result,
+          }}
+          onClose={() => update({ job: null }, { replace: true })}
+        />
+      )}
+      {details.data && site && details.data.job.site_id !== site && (
+        <p className="text-muted-foreground text-sm">该任务不属于当前选择的站点。</p>
+      )}
       <RecordsTable
         label="任务队列"
         columns={["任务", "状态", "尝试次数", "调度时间（UTC）", "操作"]}
@@ -164,7 +189,7 @@ export function Jobs() {
               </code>
             </TableCell>
             <TableCell className="px-3">
-              <StateBadge label={states[job.state]} tone={tones[job.state]} />
+              <StateBadge label={jobStates[job.state]} tone={jobTones[job.state]} />
               {job.error_code && <div className="mt-0.5 font-mono text-muted-foreground text-xs">{job.error_code}</div>}
             </TableCell>
             <TableCell className="px-3 tabular-nums">{job.attempts}</TableCell>

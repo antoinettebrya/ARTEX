@@ -21,6 +21,8 @@ export type Job = {
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   attempts: number;
   available_at: string;
+  created_at: string;
+  updated_at: string;
   error_code?: string;
   result?: unknown;
 };
@@ -144,6 +146,6 @@ export function errorMessage(error: unknown): string {
 
 export const roles = { owner: "所有者", editor: "编辑者", viewer: "查看者" } as const;
 
-export function isID(value: string): boolean {
-  return /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+export function isID(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 }

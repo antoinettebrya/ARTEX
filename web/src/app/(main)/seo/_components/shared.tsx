@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -40,13 +40,13 @@ import { useSeoQuery } from "./query";
 const pageSize = 50;
 
 type ListState = {
-  offset: number;
+  offset?: number;
   count: number;
-  hasNext: boolean;
+  hasNext?: boolean;
   loading: boolean;
   error: unknown;
   refresh: () => void;
-  setOffset: (offset: number) => void;
+  setOffset?: (offset: number) => void;
 };
 
 export function useSeoRecords<T>(path: string | null, name: string) {
@@ -95,6 +95,14 @@ export function PageFrame({
   );
 }
 
+export function FilterBar({ children }: { children: ReactNode }) {
+  return (
+    <Card className="py-3">
+      <CardContent className="flex min-w-0 flex-wrap items-end gap-3 px-3">{children}</CardContent>
+    </Card>
+  );
+}
+
 export function PageSkeleton() {
   return (
     <div className="grid gap-4" role="status" aria-label="正在加载">
@@ -131,6 +139,7 @@ export function RecordsTable({
 }) {
   if (list.loading) return <PageSkeleton />;
   if (list.error) return <LoadError error={list.error} retry={list.refresh} />;
+  const { offset = 0, hasNext, setOffset } = list;
   return (
     <Card className="gap-0 overflow-hidden p-0">
       <Table aria-label={label}>
@@ -152,7 +161,7 @@ export function RecordsTable({
           </EmptyHeader>
         </Empty>
       )}
-      {(list.offset > 0 || list.hasNext) && (
+      {setOffset && (offset > 0 || hasNext) && (
         <Pagination className="justify-end border-t px-3 py-2" aria-label="列表分页">
           <PaginationContent>
             <PaginationItem>
@@ -161,14 +170,14 @@ export function RecordsTable({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="上一页"
-                disabled={list.offset === 0}
-                onClick={() => list.setOffset(Math.max(0, list.offset - pageSize))}
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - pageSize))}
               >
                 <ChevronLeft />
               </Button>
             </PaginationItem>
             <PaginationItem className="text-muted-foreground text-xs tabular-nums">
-              第 {list.offset / pageSize + 1} 页
+              第 {offset / pageSize + 1} 页
             </PaginationItem>
             <PaginationItem>
               <Button
@@ -176,8 +185,8 @@ export function RecordsTable({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="下一页"
-                disabled={!list.hasNext}
-                onClick={() => list.setOffset(list.offset + pageSize)}
+                disabled={!hasNext}
+                onClick={() => setOffset(offset + pageSize)}
               >
                 <ChevronRight />
               </Button>

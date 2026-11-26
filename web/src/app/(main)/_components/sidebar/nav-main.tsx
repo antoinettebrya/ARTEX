@@ -1,13 +1,12 @@
 "use client";
 
 import * as React from "react";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
-import { api } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -29,6 +28,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   NavBadge,
@@ -84,32 +84,25 @@ function hasSubItems(item: NavMainItem): item is NavMainParentItem {
   return Boolean(item.subItems?.length);
 }
 
+function routePath(url: string) {
+  return url.split("?")[0].replace(/\/+$/, "");
+}
+
 export function NavMain({ items }: NavMainProps) {
   const rawPath = usePathname();
   // 路由段含中文，pathname 可能是百分号编码，解码后再与导航 url 比较，保证高亮命中。
   const path = (() => {
     try {
-      return decodeURIComponent(rawPath);
+      return routePath(decodeURIComponent(rawPath));
     } catch {
-      return rawPath;
+      return routePath(rawPath);
     }
   })();
 
-  const isItemActive = (item: NavMainItem) => {
-    if (hasSubItems(item)) {
-      return item.subItems.some((sub) => path.startsWith(sub.url));
-    }
-
-    return path === item.url;
-  };
-
-  const isSubItemActive = (url: string) => {
-    return path === url;
-  };
-
-  const isSubmenuOpen = (item: NavMainParentItem) => {
-    return item.subItems.some((sub) => path.startsWith(sub.url));
-  };
+  const isSubItemActive = (url: string) => path === routePath(url);
+  const isSubmenuOpen = (item: NavMainParentItem) =>
+    item.subItems.some((sub) => (sub.url.startsWith("/seo/") ? isSubItemActive(sub.url) : path.startsWith(sub.url)));
+  const isItemActive = (item: NavMainItem) => (hasSubItems(item) ? isSubmenuOpen(item) : isSubItemActive(item.url));
 
   return (
     <>
@@ -153,6 +146,7 @@ function NavItem({ item, isItemActive, isSubItemActive, isSubmenuOpen }: NavItem
 
   return (
     <NavCollapsibleItem
+      key={item.id.startsWith("seo-") ? String(isItemActive(item)) : item.id}
       item={item}
       isActive={isItemActive(item)}
       defaultOpen={isSubmenuOpen(item)}
@@ -171,11 +165,16 @@ function InterceptPendingBadge() {
       try {
         const list = await api.interceptPending();
         if (live) setCount(list.length);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
-    poll();
+    void poll();
     const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
   }, []);
   if (count === 0) return null;
   return (
@@ -194,7 +193,9 @@ function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
           prefetch={false}
           href={item.url}
           aria-current={isActive ? "page" : undefined}
-          onClick={() => { if (isMobile && item.url.startsWith("/seo/")) setOpenMobile(false); }}
+          onClick={() => {
+            if (isMobile && item.url.startsWith("/seo/")) setOpenMobile(false);
+          }}
           target={item.newTab ? "_blank" : undefined}
           rel={item.newTab ? "noreferrer" : undefined}
         >
@@ -263,6 +264,7 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
 }
 
 function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: NavCollapsibleItemProps) {
+  const { isMobile, setOpenMobile } = useSidebar();
   const Icon = item.icon;
 
   return (
@@ -292,6 +294,10 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
                     <Link
                       prefetch={false}
                       href={subItem.url}
+                      aria-current={isSubItemActive(subItem.url) ? "page" : undefined}
+                      onClick={() => {
+                        if (isMobile && subItem.url.startsWith("/seo/")) setOpenMobile(false);
+                      }}
                       target={subItem.newTab ? "_blank" : undefined}
                       rel={subItem.newTab ? "noreferrer" : undefined}
                     >

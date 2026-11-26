@@ -2,7 +2,7 @@
 
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { toast } from "sonner";
 
@@ -11,7 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage, type Principal, roles, SeoAPIError, seoRequest } from "@/lib/seo/client";
-import { seoGroups } from "@/lib/seo/routes";
+import { SEO_HOME, safeSeoReturn, seoGroups } from "@/lib/seo/routes";
 
 import { useSeoQuery } from "./query";
 
@@ -23,13 +23,24 @@ export function useSeoSession() {
   return session;
 }
 
+export function SessionLoading() {
+  return (
+    <div className="flex min-h-dvh items-center justify-center gap-2 text-muted-foreground" role="status">
+      <Spinner /> 正在检查登录状态…
+    </div>
+  );
+}
+
 export function SeoSession({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const returnPath = safeSeoReturn(`${pathname}?${params}`);
   const { data: principal, error, refresh } = useSeoQuery<Principal>("/me");
   const unauthorized = error instanceof SeoAPIError && error.status === 401;
   useEffect(() => {
-    if (unauthorized) router.replace("/seo/login");
-  }, [router, unauthorized]);
+    if (unauthorized) router.replace(returnPath ? `/seo/login?next=${encodeURIComponent(returnPath)}` : "/seo/login");
+  }, [router, unauthorized, returnPath]);
 
   if (!principal) {
     if (error && !unauthorized) {
@@ -45,11 +56,7 @@ export function SeoSession({ children }: { children: ReactNode }) {
         </main>
       );
     }
-    return (
-      <div className="flex min-h-dvh items-center justify-center gap-2 text-muted-foreground" role="status">
-        <Spinner /> 正在检查登录状态…
-      </div>
-    );
+    return <SessionLoading />;
   }
 
   const name = principal.email?.split("@")[0] ?? "配置凭据";
@@ -73,9 +80,9 @@ export function SeoSession({ children }: { children: ReactNode }) {
       <AppShell
         user={user}
         navigation={{
-          home: "/seo/sites",
+          home: SEO_HOME,
           title: "ARTEX SEO OS",
-          groups: seoGroups(principal.role === "owner"),
+          groups: seoGroups(principal.role, pathname, params),
           onLogout: logOut,
         }}
       >

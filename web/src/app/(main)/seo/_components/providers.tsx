@@ -430,7 +430,7 @@ function ModelCapabilities({ kind, options }: { kind: Exclude<ProviderKind, "dat
 export function Providers() {
   const { principal } = useSeoSession();
   return (
-    <PageFrame title="Provider" description="管理大模型和 SEO 数据源的凭据、配额及连接状态。">
+    <PageFrame title="AI Provider" description="管理大模型和 SEO 数据源的凭据、配额及连接状态。">
       <Tabs defaultValue="model">
         <TabsList aria-label="服务类型">
           <TabsTrigger value="model">{providerCategories.model.label}</TabsTrigger>

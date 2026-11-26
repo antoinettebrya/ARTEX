@@ -2,23 +2,30 @@ import { Suspense } from "react";
 
 import { notFound } from "next/navigation";
 
-import { SEO_SECTIONS, type SeoSection } from "@/lib/seo/routes";
+import { getSeoPage, seoAliases, seoPages } from "@/lib/seo/routes";
 
-import { SeoPage } from "../_components/page";
+import { SeoEntry } from "../_components/page";
 import { PageSkeleton } from "../_components/shared";
 
 export const dynamicParams = false;
 
 export function generateStaticParams() {
-  return SEO_SECTIONS.map((section) => ({ section }));
+  return [
+    ...seoPages.flatMap(({ path }) => {
+      const [, , section, view] = path.split("/");
+      return view ? [] : [{ section }];
+    }),
+    ...Object.keys(seoAliases).map((section) => ({ section })),
+  ];
 }
 
 export default async function Page({ params }: { params: Promise<{ section: string }> }) {
   const { section } = await params;
-  if (!SEO_SECTIONS.includes(section as SeoSection)) notFound();
+  const route = getSeoPage(`/seo/${section}`);
+  if (!route && !Object.hasOwn(seoAliases, section)) notFound();
   return (
     <Suspense fallback={<PageSkeleton />}>
-      <SeoPage section={section as SeoSection} />
+      <SeoEntry section={section} route={route} />
     </Suspense>
   );
 }

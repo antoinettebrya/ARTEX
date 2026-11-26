@@ -28,7 +28,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { errorMessage, type Member, type Role, roles, seoRequest } from "@/lib/seo/client";
 
 import { useSeoSession } from "./session";
-import { ConfirmChange, field, Field, FormDialog, PageFrame, RecordsTable, StateBadge, useSeoList } from "./shared";
+import { ConfirmChange, Field, FormDialog, field, PageFrame, RecordsTable, StateBadge, useSeoList } from "./shared";
 
 function RoleField({ role = "viewer" }: { role?: Role }) {
   return (
@@ -89,7 +89,7 @@ export function Members() {
 
   return (
     <PageFrame
-      title="成员"
+      title="成员管理"
       description="管理组织角色和访问凭据。"
       actions={
         <Button variant="outline" size="sm" onClick={() => setAdd(true)}>

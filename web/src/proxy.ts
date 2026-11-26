@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
+import { SEO_HOME } from "@/lib/seo/routes";
 import { seoProxy } from "@/lib/seo/server";
 
 const AUTH_PAGES = ["/login", "/setup"];
@@ -12,10 +13,10 @@ export function proxy(request: NextRequest) {
   const seoOrigin = process.env.SEOOS_API_ORIGIN;
   if (seoOrigin) {
     if (pathname.startsWith("/seo/api/")) return seoProxy(request, seoOrigin, pathname.slice("/seo/api".length));
-    if (pathname === "/seo") return NextResponse.redirect(new URL("/seo/sites", request.url));
+    if (pathname === "/seo") return NextResponse.redirect(new URL(SEO_HOME, request.url));
     if (isSEO) return NextResponse.next();
     if (isAPI) return new NextResponse(null, { status: 404 });
-    return NextResponse.redirect(new URL("/seo/sites", request.url));
+    return NextResponse.redirect(new URL(SEO_HOME, request.url));
   }
   if (isSEO) return new NextResponse(null, { status: 404 });
   if (isAPI) return NextResponse.next();

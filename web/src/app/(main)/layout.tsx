@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, Suspense, useEffect, useState } from "react";
 
 import { usePathname } from "next/navigation";
 
@@ -8,7 +8,7 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { auth } from "@/lib/auth";
 
 import { AppShell } from "./_components/app-shell";
-import { SeoSession } from "./seo/_components/session";
+import { SeoSession, SessionLoading } from "./seo/_components/session";
 
 function LegacyGate({ children }: { children: ReactNode }) {
   const user = useCurrentUser();
@@ -31,7 +31,11 @@ function LegacyGate({ children }: { children: ReactNode }) {
 export default function Layout({ children }: { readonly children: ReactNode }) {
   const pathname = usePathname();
   if (pathname === "/seo" || pathname.startsWith("/seo/")) {
-    return <SeoSession>{children}</SeoSession>;
+    return (
+      <Suspense fallback={<SessionLoading />}>
+        <SeoSession>{children}</SeoSession>
+      </Suspense>
+    );
   }
   return <LegacyGate>{children}</LegacyGate>;
 }
