@@ -31,7 +31,9 @@ import {
   sourceKinds,
 } from "@/lib/seo/content";
 import { marketLabel } from "@/lib/seo/research";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { Field, formatTime, StateBadge } from "../shared";
 import {
   ArticlePreview,
@@ -657,6 +659,7 @@ export function HistoryView({
   onStage: StartStage;
   onRestore: (version: ContentVersion) => void;
 }) {
+  const { href } = useSeoLocation();
   const history = workspace.history ?? [];
   const publications = workspace.publications ?? [];
   const [compare, setCompare] = useState(false);
@@ -747,7 +750,13 @@ export function HistoryView({
                           workspace.project.status === "prepared" &&
                           publication.version === workspace.article_version && (
                             <Button asChild size="sm" variant="outline">
-                              <Link href={`/seo/execution?site=${workspace.project.site_id}&package=${publication.id}`}>
+                              <Link
+                                href={href(seoRoutes.execution.publishing.path, {
+                                  site: workspace.project.site_id,
+                                  project: workspace.project.id,
+                                  package: publication.id,
+                                })}
+                              >
                                 <ArrowRight /> 前往站点发布
                               </Link>
                             </Button>

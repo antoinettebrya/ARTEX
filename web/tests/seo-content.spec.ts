@@ -29,7 +29,18 @@ async function signIn(page: Page, token: string) {
   await page.goto("/seo/login");
   await page.getByLabel("访问凭据", { exact: true }).fill(token);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("table", { name: "已登记站点" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "运营总览", exact: true })).toBeVisible();
+}
+
+async function openSection(page: Page, group: string, name: string) {
+  const menu = page.locator('[data-slot="sidebar-content"]');
+  const groupButton = menu.getByRole("button", { name: group, exact: true });
+  if (!(await groupButton.isVisible())) {
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  }
+  if ((await groupButton.getAttribute("aria-expanded")) !== "true") await groupButton.click();
+  await menu.getByRole("link", { name, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
 }
 
 async function screenshot(page: Page, name: string) {
@@ -86,6 +97,20 @@ test("content studio produces an evidenced, versioned and separately approved CM
     "content test site",
   );
   const siteID: string = created.site.id;
+  const secondSite = await read(
+    await request.post(`${base}/sites`, {
+      headers,
+      data: {
+        name: "内容上下文验收站点",
+        base_url: "https://content-context.example.com",
+        cms: "generic",
+        country_code: "US",
+        language_tag: "en-US",
+      },
+    }),
+    "second site for project isolation",
+  );
+  const secondSiteID: string = secondSite.site.id;
   const provider = await read(
     await request.post(`${base}/providers`, {
       headers,
@@ -145,10 +170,9 @@ test("content studio produces an evidenced, versioned and separately approved CM
   }
 
   await signIn(page, token);
-  await page.getByRole("link", { name: "SEO 研究", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "SEO 研究", exact: true })).toBeVisible();
-  await screenshot(page, "phase3-artex-baseline.png");
-  await page.getByRole("link", { name: "Provider", exact: true }).click();
+  await openSection(page, "Research", "关键词研究");
+  await screenshot(page, "phase3-research-entry.png");
+  await openSection(page, "AI & System", "AI Provider");
   for (const [name, role] of [
     [writer, "writer"],
     [reviewer, "reviewer"],
@@ -160,9 +184,10 @@ test("content studio produces an evidenced, versioned and separately approved CM
     await expect(dialog).toBeHidden();
   }
 
-  await page.getByRole("link", { name: "内容工作室", exact: true }).click();
+  const openContent = (name: string) => openSection(page, "Content", name);
+  await openContent("内容项目");
   await page.getByLabel("内容站点", { exact: true }).selectOption(siteID);
-  const openTab = (name: string) => page.getByRole("tab", { name, exact: true }).click();
+  await expect(page).toHaveURL((url) => url.searchParams.get("site") === siteID);
 
   async function runStage(label: string, options: { model?: string; url?: string; expectedError?: string } = {}) {
     await page.getByRole("button", { name: label, exact: true }).click();
@@ -180,7 +205,7 @@ test("content studio produces an evidenced, versioned and separately approved CM
     await expect(dialog).toBeHidden();
   }
 
-  await openTab("站点清单");
+  await openContent("站点内容清单");
   await page.getByRole("button", { name: "配置只读采集", exact: true }).click();
   const crawl = page.getByRole("dialog", { name: "配置只读采集", exact: true });
   await crawl.getByRole("switch", { name: "我授权只读访问本站和下列来源" }).click();
@@ -217,22 +242,35 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(project).toBeHidden();
   await expect(page.getByLabel("内容项目", { exact: true })).toBeVisible();
   const projectID = await page.getByLabel("内容项目", { exact: true }).inputValue();
+  const atProject = (path: string) => (url: URL) =>
+    url.pathname === path && url.searchParams.get("site") === siteID && url.searchParams.get("project") === projectID;
+  await expect(page).toHaveURL(atProject("/seo/content"));
+  await expect(page.getByRole("table", { name: "内容项目列表", exact: true })).toContainText(keyword);
+  await screenshot(page, "phase3-content-projects.png");
   const fetchWorkspace = async () =>
     (await read(await request.get(`${base}/content/projects/${projectID}`, { headers }), "content workspace"))
       .workspace;
 
-  await openTab("内容策略");
+  await openContent("内容策略");
+  await expect(page).toHaveURL(atProject("/seo/content/strategy"));
+  await page.goBack();
+  await expect(page).toHaveURL(atProject("/seo/content"));
+  await page.goForward();
+  await expect(page).toHaveURL(atProject("/seo/content/strategy"));
+  await page.reload();
+  await expect(page.getByLabel("内容站点", { exact: true })).toHaveValue(siteID);
+  await expect(page.getByLabel("内容项目", { exact: true })).toHaveValue(projectID);
   await runStage("生成内容策略");
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await expect(page.getByText("决策理由", { exact: true })).toBeVisible();
   expect((await fetchWorkspace()).evidence.serp_snapshot_id).toBeTruthy();
   await screenshot(page, "phase3-content-strategy.png");
 
-  await openTab("内容简报");
+  await openContent("内容简报");
   await runStage("生成内容简报");
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await expect(page.getByLabel("主关键词", { exact: true })).toHaveValue(keyword);
-  await openTab("研究来源");
+  await openContent("研究来源");
   await page.getByRole("button", { name: "登记一手来源", exact: true }).click();
   const sourceDialog = page.getByRole("dialog", { name: "登记一手来源", exact: true });
   await sourceDialog.getByLabel("来源 URL").fill(source);
@@ -243,7 +281,7 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page.getByText(/every 90 days/i).first()).toBeVisible();
   await screenshot(page, "phase3-source-evidence.png");
 
-  await openTab("文章编辑");
+  await openContent("文章编辑");
   await runStage("生成文章大纲", { model: `${writer} · fixture-writer` });
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await expect(page.getByRole("list", { name: "文章大纲" })).toBeVisible();
@@ -258,13 +296,13 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await screenshot(page, "phase3-article-editor.png");
 
-  await openTab("事实核验");
+  await openContent("事实核验");
   await runStage("核验文章事实");
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await expect(page.getByText("事实核验通过", { exact: true })).toBeVisible();
   await expect(page.getByRole("table", { name: "事实核验结果", exact: true })).toContainText(/90 days/i);
 
-  await openTab("质量审核");
+  await openContent("质量审核");
   await runStage("独立质量审核", { model: `${reviewer} · fixture-reviewer` });
   await page.getByRole("button", { name: "刷新项目", exact: true }).click();
   await expect(page.getByText("已通过质量门禁", { exact: true })).toBeVisible();
@@ -282,7 +320,7 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(publication.getByRole("article")).toBeVisible();
   await publication.getByRole("button", { name: "准备 CMS 发布包", exact: true }).click();
   await expect(publication).toBeHidden();
-  await openTab("版本历史");
+  await openContent("版本历史");
   await expect(page.getByRole("table", { name: "CMS 发布记录" })).toContainText("已准备");
   await page.getByRole("button", { name: "比较版本", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "比较内容版本" })).toBeVisible();
@@ -311,7 +349,8 @@ test("content studio produces an evidenced, versioned and separately approved CM
   }
   await screenshot(page, "phase3-version-publication.png");
 
-  await openTab("内容更新");
+  await page.goto(`/seo/content?site=${siteID}&project=${projectID}&view=refresh`);
+  await expect(page).toHaveURL(atProject("/seo/content/refresh"));
   await page.getByRole("button", { name: "登记更新信号", exact: true }).click();
   const signals = page.getByRole("dialog", { name: "登记更新信号", exact: true });
   await signals.getByLabel("流量变动（%）", { exact: true }).fill("-25");
@@ -338,9 +377,10 @@ test("content studio produces an evidenced, versioned and separately approved CM
   try {
     await signIn(viewer, member.token);
     await viewer.goto(`/seo/content?site=${siteID}`);
-    await expect(viewer.getByRole("heading", { name: "内容工作室" })).toBeVisible();
+    await expect(viewer.getByRole("heading", { level: 1, name: "内容项目", exact: true })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "创建内容项目", exact: true })).toHaveCount(0);
-    await viewer.getByRole("tab", { name: "文章编辑", exact: true }).click();
+    await viewer.goto(`/seo/content/article?site=${siteID}&project=${projectID}`);
+    await expect(viewer).toHaveURL(atProject("/seo/content/article"));
     await expect(viewer.getByRole("article")).toBeVisible();
     await expect(viewer.getByRole("button", { name: "保存文章版本", exact: true })).toHaveCount(0);
     const denied = await request.post(`${base}/content/projects/${projectID}/actions`, {
@@ -355,9 +395,15 @@ test("content studio produces an evidenced, versioned and separately approved CM
   if (executionEnabled) {
     const packageID = (await fetchWorkspace()).publications[0].id;
     await runExecutionFlow({ page, request, base, headers, siteID, siteURL, packageID });
-    await page.getByRole("link", { name: "内容工作室", exact: true }).click();
-    await page.getByLabel("内容站点", { exact: true }).selectOption(siteID);
   }
+
+  await page.goto(`/seo/content/article?site=${secondSiteID}&project=${projectID}`);
+  await expect(page.getByText("当前站点无法读取所选项目", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("章节 1 正文", { exact: true })).toHaveCount(0);
+  await page.getByLabel("内容站点", { exact: true }).selectOption(siteID);
+  await expect(page).toHaveURL((url) => url.searchParams.get("site") === siteID && !url.searchParams.has("project"));
+  await expect(page.getByLabel("内容项目", { exact: true })).toHaveValue(projectID);
+  await expect(page.getByLabel("章节 1 正文", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /^Current theme: light/u }).click();
   await expect(page.locator("html")).toHaveClass(/\bdark\b/u);
@@ -371,13 +417,14 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page.locator("html")).toHaveAttribute("data-theme-preset", "tangerine");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 390, height: 844 });
-  await openTab("项目概览");
-  await expect(page.getByRole("heading", { name: "内容工作室" })).toBeVisible();
+  await openContent("内容项目");
+  await expect(page.locator('[data-slot="sidebar"][data-mobile="true"]')).toBeHidden();
+  await expect(page.getByRole("heading", { level: 1, name: "内容项目", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await screenshot(page, "phase3-mobile-dark.png");
   if (executionEnabled) {
-    await page.goto(`/seo/execution?site=${siteID}`);
-    await expect(page.getByRole("heading", { name: "站点执行", exact: true })).toBeVisible();
+    await page.goto(`/seo/sites/connections?site=${siteID}`);
+    await expect(page.getByRole("heading", { level: 1, name: "CMS 连接", exact: true })).toBeVisible();
     await expect(page.getByRole("table", { name: "站点连接", exact: true })).toContainText("Phase 4 通用 CMS 验收");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await executionScreenshot(page, "phase4-mobile-dark.png");

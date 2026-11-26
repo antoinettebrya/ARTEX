@@ -28,7 +28,9 @@ import {
   sourceKinds,
 } from "@/lib/seo/content";
 import { initialMarket } from "@/lib/seo/research";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { useSeoQuery } from "../query";
 import { MarketFields, readMarket } from "../research/forms";
 import { Field, FormDialog, field, LoadError, PageSkeleton } from "../shared";
@@ -82,6 +84,7 @@ export function StageEditor({
   onSaved: (job: Job) => void;
 }) {
   const { kind } = selection;
+  const { href } = useSeoLocation();
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const requiresModel = modelJobs.includes(kind);
   const urls = kind === "page_extraction" || kind === "content_publish_verify";
@@ -155,7 +158,9 @@ export function StageEditor({
           {profiles.error !== undefined && <LoadError error={profiles.error} retry={profiles.refresh} />}
           {!providers.loading && !profiles.loading && models.length === 0 && (
             <Button asChild variant="link" size="sm" className="px-0">
-              <Link href="/seo/providers">查看内容模型配置</Link>
+              <Link href={href(seoRoutes.system.providers.path, { site: site.id, project: project?.id })}>
+                查看内容模型配置
+              </Link>
             </Button>
           )}
         </div>
