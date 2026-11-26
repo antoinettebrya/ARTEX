@@ -1,0 +1,127 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.00015,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "result_count": 1,
+      "cost": 0.00015,
+      "data": {
+        "api": "on_page",
+        "function": "content_parsing",
+        "url": "https://competitor.example.com/guide",
+        "markdown_view": false
+      },
+      "result": [
+        {
+          "crawl_progress": "finished",
+          "crawl_status": null,
+          "items_count": 1,
+          "items": [
+            {
+              "type": "content_parsing_element",
+              "fetch_time": "2024-12-07 10:30:00 +00:00",
+              "status_code": 200,
+              "page_content": {
+                "header": {
+                  "primary_content": [
+                    {
+                      "text": "Header navigation"
+                    }
+                  ]
+                },
+                "footer": null,
+                "main_topic": [
+                  {
+                    "h_title": "Battery life",
+                    "main_title": "Guide",
+                    "author": "Sample Author",
+                    "language": "en",
+                    "level": 2,
+                    "primary_content": [
+                      {
+                        "text": "Private raw fixture sentence"
+                      },
+                      {
+                        "text": "More raw body copy"
+                      }
+                    ],
+                    "table_content": [
+                      {
+                        "header": [],
+                        "body": []
+                      }
+                    ]
+                  },
+                  {
+                    "h_title": "Frequently Asked Questions",
+                    "main_title": "Guide",
+                    "author": "Sample Author",
+                    "language": "en",
+                    "level": 2,
+                    "secondary_content": [
+                      {
+                        "text": "Several questions were observed."
+                      }
+                    ]
+                  },
+                  {
+                    "h_title": "How long does it last?",
+                    "main_title": "Guide",
+                    "author": "Sample Author",
+                    "language": "en",
+                    "level": 3,
+                    "primary_content": [
+                      {
+                        "text": "Private raw fixture sentence"
+                      }
+                    ]
+                  },
+                  {
+                    "h_title": "Which model should I buy?",
+                    "main_title": "Guide",
+                    "author": "Sample Author",
+                    "language": "en",
+                    "level": 2,
+                    "primary_content": [
+                      {
+                        "text": "Private raw fixture sentence"
+                      }
+                    ]
+                  }
+                ],
+                "secondary_topic": [
+                  {
+                    "h_title": "Other features",
+                    "author": "Sample Author",
+                    "language": "en",
+                    "level": 3,
+                    "primary_content": [
+                      {
+                        "text": "Private raw fixture sentence"
+                      }
+                    ]
+                  }
+                ],
+                "contacts": {
+                  "telephones": [
+                    "Private raw fixture sentence"
+                  ],
+                  "emails": [
+                    "contact@example.com"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

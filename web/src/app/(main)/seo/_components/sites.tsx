@@ -62,7 +62,9 @@ export function Sites() {
         {list.records.map((site) => (
           <TableRow key={site.id}>
             <TableCell className="px-3 py-2">
-              <div className="font-medium">{site.name}</div>
+              <Link href={`/seo/research?site=${site.id}`} className="font-medium hover:underline">
+                {site.name}
+              </Link>
               <div className="text-muted-foreground text-xs">{site.base_url}</div>
             </TableCell>
             <TableCell className="px-3">

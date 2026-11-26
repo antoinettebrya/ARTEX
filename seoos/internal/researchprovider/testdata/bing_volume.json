@@ -1,0 +1,42 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.09,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.09,
+      "result_count": 1,
+      "data": {
+        "api": "keywords_data",
+        "function": "search_volume",
+        "se": "bing",
+        "location_code": 2250,
+        "language_code": "fr",
+        "device": "mobile",
+        "keywords": [
+          "café"
+        ]
+      },
+      "result": [
+        {
+          "keyword": "café",
+          "location_code": 2250,
+          "language_code": "fr",
+          "search_partners": false,
+          "device": "mobile",
+          "competition": 0.5,
+          "search_volume": 1800,
+          "cpc": null,
+          "categories": [],
+          "monthly_searches": []
+        }
+      ]
+    }
+  ]
+}

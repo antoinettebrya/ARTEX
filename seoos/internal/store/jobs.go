@@ -15,11 +15,12 @@ const jobColumns = `id::text, organization_id::text, site_id::text, COALESCE(pro
 	kind, idempotency_key, state, attempts, available_at, COALESCE(error_code, ''),
 	COALESCE(result, 'null'::jsonb), created_at, updated_at`
 
-func scanJob(row rowScanner) (domain.Job, error) {
+func scanJob(row rowScanner, tail ...any) (domain.Job, error) {
 	var job domain.Job
-	err := row.Scan(&job.ID, &job.OrganizationID, &job.SiteID, &job.ProviderID,
+	dest := []any{&job.ID, &job.OrganizationID, &job.SiteID, &job.ProviderID,
 		&job.Kind, &job.IdempotencyKey, &job.State, &job.Attempts, &job.AvailableAt,
-		&job.ErrorCode, &job.Result, &job.CreatedAt, &job.UpdatedAt)
+		&job.ErrorCode, &job.Result, &job.CreatedAt, &job.UpdatedAt}
+	err := row.Scan(append(dest, tail...)...)
 	job.AvailableAt = job.AvailableAt.UTC()
 	job.CreatedAt = job.CreatedAt.UTC()
 	job.UpdatedAt = job.UpdatedAt.UTC()
@@ -30,11 +31,25 @@ func scanJob(row rowScanner) (domain.Job, error) {
 }
 
 func (s *Store) EnqueueJob(ctx context.Context, orgID string, input domain.JobInput) (domain.Job, bool, error) {
+	if err := input.Validate(); err != nil {
+		return domain.Job{}, false, err
+	}
+	return s.enqueueJob(ctx, orgID, input, nil)
+}
+
+func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobInput, research *domain.ResearchInput) (domain.Job, bool, error) {
 	if err := validateOrganizationID(orgID); err != nil {
 		return domain.Job{}, false, err
 	}
-	if err := input.Validate(); err != nil {
-		return domain.Job{}, false, err
+	var priority int
+	var request []byte
+	if research != nil {
+		priority = research.Priority
+		var err error
+		request, err = json.Marshal(research)
+		if err != nil {
+			return domain.Job{}, false, err
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -44,10 +59,24 @@ func (s *Store) EnqueueJob(ctx context.Context, orgID string, input domain.JobIn
 	getByKey := func() (domain.Job, error) {
 		job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+`
 			FROM public.seo_jobs WHERE organization_id = $1 AND idempotency_key = $2`, orgID, input.IdempotencyKey))
-		if err == nil && job.JobInput != input {
+		if err != nil {
+			return job, err
+		}
+		if job.JobInput != input {
 			return domain.Job{}, domain.ErrIdempotencyConflict
 		}
-		return job, err
+		if research != nil {
+			var same bool
+			err = tx.QueryRowContext(ctx, `SELECT request = $3::jsonb FROM public.seo_research_jobs
+				WHERE organization_id = $1 AND job_id = $2`, orgID, job.ID, string(request)).Scan(&same)
+			if err != nil {
+				return domain.Job{}, err
+			}
+			if !same {
+				return domain.Job{}, domain.ErrIdempotencyConflict
+			}
+		}
+		return job, nil
 	}
 	if job, err := getByKey(); !errors.Is(err, domain.ErrNotFound) {
 		return job, false, err
@@ -62,25 +91,38 @@ func (s *Store) EnqueueJob(ctx context.Context, orgID string, input domain.JobIn
 	}
 	if input.ProviderID != "" {
 		var enabled bool
-		if err := tx.QueryRowContext(ctx, `SELECT enabled FROM public.seo_providers
-			WHERE organization_id = $1 AND id = $2`, orgID, input.ProviderID).Scan(&enabled); err != nil {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT enabled, kind FROM public.seo_providers
+			WHERE organization_id = $1 AND id = $2`, orgID, input.ProviderID).Scan(&enabled, &kind); err != nil {
 			return domain.Job{}, false, classifyError(err)
+		}
+		expected := domain.ProviderOpenAI
+		if domain.UsesDataProvider(input.Kind) {
+			expected = domain.ProviderDataForSEO
+		}
+		if kind != expected {
+			return domain.Job{}, false, &domain.ValidationError{Field: "provider_id", Message: "provider type does not serve this job"}
 		}
 		if !enabled {
 			return domain.Job{}, false, domain.ErrProviderDisabled
 		}
 	}
 	job, err := scanJob(tx.QueryRowContext(ctx, `
-		INSERT INTO public.seo_jobs (id, organization_id, site_id, provider_id, kind, idempotency_key)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6)
+		INSERT INTO public.seo_jobs (id, organization_id, site_id, provider_id, kind, idempotency_key, priority)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7)
 		ON CONFLICT (organization_id, idempotency_key) DO NOTHING
-		RETURNING `+jobColumns, uuid.NewString(), orgID, input.SiteID, input.ProviderID, input.Kind, input.IdempotencyKey))
+		RETURNING `+jobColumns, uuid.NewString(), orgID, input.SiteID, input.ProviderID, input.Kind, input.IdempotencyKey, priority))
 	if errors.Is(err, domain.ErrNotFound) {
 		job, err := getByKey()
 		return job, false, err
 	}
 	if err != nil {
 		return domain.Job{}, false, err
+	}
+	if research != nil {
+		if err := createResearchJob(ctx, tx, job, *research, request); err != nil {
+			return domain.Job{}, false, err
+		}
 	}
 	if err := auditJob(ctx, tx, "job.enqueue", job); err != nil {
 		return domain.Job{}, false, err
@@ -168,7 +210,7 @@ func (s *Store) ClaimJob(ctx context.Context) (*domain.Lease, error) {
 	job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM public.seo_jobs
 		WHERE (state = 'queued' AND available_at <= now())
 		   OR (state = 'running' AND lease_until <= now())
-		ORDER BY available_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`))
+		ORDER BY priority DESC, available_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`))
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, nil
 	}
@@ -241,6 +283,9 @@ func (s *Store) FinishJob(ctx context.Context, lease domain.Lease, outcome domai
 		delay := time.Duration(attempts*attempts) * 5 * time.Second
 		if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp() + ($1::int * interval '1 second')`, int(delay/time.Second)).Scan(&runAt); err != nil {
 			return err
+		}
+		if outcome.RetryAfter.After(runAt) {
+			runAt = outcome.RetryAfter
 		}
 	case outcome.Code == "":
 		return errors.New("invalid job result")

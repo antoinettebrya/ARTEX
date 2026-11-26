@@ -81,3 +81,22 @@ canonical URL length.
 | `python3 scripts/test_dashboard.py` | 两条 Chrome E2E 通过，覆盖真实数据读写、同源会话、跨源写入拒绝、角色隔离、导航与主题 |
 | Biome 定向检查 | 21 个新增或抽出的文件通过 |
 | `npm run lint` | 全量前后均报告 84 个错误，仍需单独处理 |
+
+## Phase 2 关键词与 SERP 研究 · 2026-11-26
+
+基线为 `dbe21d18e26b7df6ad1c127f7dfc9f79ee332781`。本地使用 macOS arm64、Go 1.26.3、临时 PostgreSQL 16.16、Node.js 24.22.1 和 Chrome。
+
+| 命令或场景 | 实测结果 |
+| --- | --- |
+| `go test -race -count=1 ./...` | 57 项顶层测试通过，全部 PostgreSQL 集成测试实际运行。覆盖加密与租户隔离、不同市场数据、SERP 过滤、聚类、页面映射、费用预留、限流与 Worker 租约恢复 |
+| `go mod verify`、`go vet ./...`、`go build -trimpath -o bin/seoos ./cmd/seoos` | 通过。依赖检查确认 238 个包，无旧 ARTEX 或 Norma 运行依赖 |
+| `go test -race ./internal/researchprovider` | Google、Bing 和 OnPage 使用固定本地 HTTP 夹具，覆盖实际请求结构、不同语言、429、超时、账单、缺失数据和快照 |
+| `python3 scripts/smoke_test.py` | 实际 HTTP 与 PostgreSQL 启动、鉴权、跨组织隔离、重启持久化和退出通过 |
+| `python3 scripts/load_test.py` | 12 路并发登记 160 站、提交 160 个本地站点库存任务，零失败。负载在本地 API、PostgreSQL 和 Worker 上实测 |
+| 从 `dbe21d18` 启动、应用 `0004`、切回迁移前副本 | 旧站点和 OpenAI Provider 保留。旧二进制拒绝升级库，可从迁移前 PostgreSQL 副本启动并读回原有记录 |
+| `npm run build:static`、`npm run build`、`npx tsc --noEmit` | 静态导出、生产构建和 TypeScript 通过。变更文件的 Biome 定向检查通过，全量 lint 仍报告原有 84 个问题 |
+| `SEOOS_E2E_RESEARCH=1 python3 scripts/test_dashboard.py` | Chrome 3 条通过。覆盖导航、桌面与移动 SERP、十条自然结果、竞品正文区块和结构化证据、两关键词聚类、URL 映射、六项评分、缓存和角色访问 |
+
+研究浏览器流程使用回环 HTTP Provider、真实 Go Worker 与临时 PostgreSQL。真实 DataForSEO 调用为 0 次，真实费用为 0。真账号的地区覆盖、数据可用性和费用对账待验。150 站以上实测范围为站点库存任务，付费研究任务的生产负载仍需采集实测数据。
+
+数据库迁移、研究 API、缓存有效期、预算和回退步骤见 [Phase 2 研究契约](../docs/seo-os/PHASE2_RESEARCH.md)。

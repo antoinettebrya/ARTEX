@@ -1,0 +1,74 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.0001251,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.0001251,
+      "result_count": 1,
+      "data": {
+        "api": "on_page",
+        "function": "instant_pages",
+        "url": "https://competitor.example.com/guide",
+        "accept_language": "en"
+      },
+      "result": [
+        {
+          "crawl_progress": "finished",
+          "crawl_status": null,
+          "items_count": 1,
+          "items": [
+            {
+              "resource_type": "html",
+              "status_code": 200,
+              "url": "https://competitor.example.com/guide",
+              "meta": {
+                "title": "Guide",
+                "description": "Overview",
+                "canonical": "/guide",
+                "meta_keywords": "phone, battery, Phone",
+                "htags": {
+                  "h1": [
+                    "Guide"
+                  ],
+                  "h2": [
+                    "Coverage"
+                  ],
+                  "h3": [
+                    "Details"
+                  ],
+                  "h4": [
+                    "Example"
+                  ],
+                  "h5": [
+                    "Section"
+                  ],
+                  "h6": [
+                    "Tip"
+                  ]
+                },
+                "content": {
+                  "plain_text_word_count": 250
+                }
+              },
+              "checks": {
+                "has_micromarkup": true
+              },
+              "last_modified": {
+                "header": "2025-03-11 02:00:00 +00:00",
+                "sitemap": null,
+                "meta_tag": "2025-03-12 10:30:22 +00:00"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

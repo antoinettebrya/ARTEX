@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -30,13 +31,13 @@ func (s *Store) SetProviderKey(key []byte) error {
 }
 
 const providerColumns = `id::text, organization_id::text, name, model, timeout_seconds,
-	requests_per_minute, requests_per_day, max_output_tokens, enabled, version, created_at, updated_at`
+	requests_per_minute, requests_per_day, max_output_tokens, enabled, version, created_at, updated_at, kind, daily_cost_micros`
 
 func scanProvider(row rowScanner, tail ...any) (domain.Provider, error) {
-	provider := domain.Provider{Kind: "openai"}
+	var provider domain.Provider
 	dest := []any{&provider.ID, &provider.OrganizationID, &provider.Name, &provider.Model, &provider.TimeoutSeconds,
 		&provider.RequestsPerMinute, &provider.RequestsPerDay, &provider.MaxOutputTokens, &provider.Enabled,
-		&provider.Version, &provider.CreatedAt, &provider.UpdatedAt}
+		&provider.Version, &provider.CreatedAt, &provider.UpdatedAt, &provider.Kind, &provider.DailyCostMicros}
 	err := row.Scan(append(dest, tail...)...)
 	provider.CreatedAt = provider.CreatedAt.UTC()
 	provider.UpdatedAt = provider.UpdatedAt.UTC()
@@ -85,12 +86,19 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 	if err != nil {
 		return domain.Provider{}, err
 	}
+	secret := []byte(input.APIKey)
+	if input.Kind == domain.ProviderDataForSEO && input.Login != "" {
+		secret, err = json.Marshal(dataForSEOCredentials{Login: input.Login, Password: input.Password})
+		if err != nil {
+			return domain.Provider{}, err
+		}
+	}
 	var sealed []byte
-	if input.APIKey != "" {
+	if len(secret) > 0 {
 		if s.providerCipher == nil {
 			return domain.Provider{}, domain.ErrProviderNotConfigured
 		}
-		sealed = s.providerCipher.Seal(nil, nil, []byte(input.APIKey), providerBinding(orgID, id))
+		sealed = s.providerCipher.Seal(nil, nil, secret, providerBinding(input.Kind, orgID, id))
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -98,14 +106,14 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 	}
 	defer tx.Rollback()
 	settings := []any{orgID, id, input.Name, input.Model, sealed, input.TimeoutSeconds,
-		input.RequestsPerMinute, input.RequestsPerDay, input.MaxOutputTokens, input.Enabled}
+		input.RequestsPerMinute, input.RequestsPerDay, input.MaxOutputTokens, input.Enabled, input.Kind, input.DailyCostMicros}
 	var provider domain.Provider
 	var details any
 	action := "provider.create"
 	if creating {
 		provider, err = scanProvider(tx.QueryRowContext(ctx, `INSERT INTO public.seo_providers
-			(organization_id, id, name, model, credential, timeout_seconds, requests_per_minute, requests_per_day, max_output_tokens, enabled)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+providerColumns, settings...))
+			(organization_id, id, name, model, credential, timeout_seconds, requests_per_minute, requests_per_day, max_output_tokens, enabled, kind, daily_cost_micros)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+providerColumns, settings...))
 		details = provider
 	} else {
 		before, err := scanProvider(tx.QueryRowContext(ctx, `SELECT `+providerColumns+` FROM public.seo_providers
@@ -113,12 +121,15 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 		if err != nil {
 			return domain.Provider{}, err
 		}
+		if before.Kind != input.Kind {
+			return domain.Provider{}, &domain.ValidationError{Field: "kind", Message: "cannot change a provider's type"}
+		}
 		if before.Version != input.Version {
 			return domain.Provider{}, domain.ErrVersionConflict
 		}
 		updated, err := scanProvider(tx.QueryRowContext(ctx, `UPDATE public.seo_providers SET name=$3, model=$4,
 			credential=COALESCE($5::bytea, credential), timeout_seconds=$6, requests_per_minute=$7, requests_per_day=$8,
-			max_output_tokens=$9, enabled=$10, version=version+1, updated_at=clock_timestamp()
+			max_output_tokens=$9, enabled=$10, kind=$11, daily_cost_micros=$12, version=version+1, updated_at=clock_timestamp()
 			WHERE organization_id=$1 AND id=$2 RETURNING `+providerColumns, settings...))
 		if err != nil {
 			return domain.Provider{}, err
@@ -135,8 +146,13 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 	return provider, tx.Commit()
 }
 
-func providerBinding(orgID, id string) []byte {
-	return []byte("seoos/openai/" + orgID + "/" + id)
+type dataForSEOCredentials struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+func providerBinding(kind, orgID, id string) []byte {
+	return []byte("seoos/" + kind + "/" + orgID + "/" + id)
 }
 
 // ReserveProviderCall serializes spend per provider. Failed and interrupted
@@ -160,7 +176,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	if err != nil {
 		return domain.ProviderCall{}, err
 	}
-	if !provider.Enabled {
+	if !provider.Enabled || provider.Kind != domain.ProviderOpenAI {
 		return domain.ProviderCall{}, domain.ErrProviderDisabled
 	}
 	var now time.Time
@@ -186,7 +202,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	if minute >= provider.RequestsPerMinute {
 		return domain.ProviderCall{DeferUntil: oldest.Time.Add(time.Minute)}, nil
 	}
-	key, err := s.providerCipher.Open(nil, nil, sealed, providerBinding(job.OrganizationID, provider.ID))
+	key, err := s.providerCipher.Open(nil, nil, sealed, providerBinding(provider.Kind, job.OrganizationID, provider.ID))
 	if err != nil {
 		return domain.ProviderCall{}, domain.ErrProviderNotConfigured
 	}

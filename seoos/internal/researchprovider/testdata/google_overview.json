@@ -1,0 +1,54 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.0101,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.0101,
+      "result_count": 1,
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "keyword_overview",
+        "se_type": "google",
+        "location_code": 2392,
+        "language_code": "ja",
+        "keywords": [
+          "携帯"
+        ]
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "location_code": 2392,
+          "language_code": "ja",
+          "items_count": 1,
+          "items": [
+            {
+              "se_type": "google",
+              "keyword": "携帯",
+              "location_code": 2392,
+              "language_code": "ja",
+              "keyword_info": {
+                "search_volume": 0,
+                "cpc": null,
+                "competition": null
+              },
+              "keyword_properties": {
+                "keyword_difficulty": 0
+              },
+              "search_intent_info": {
+                "main_intent": "informational"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

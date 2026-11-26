@@ -93,6 +93,7 @@ type JobOutcome struct {
 	Code       string
 	Retry      bool
 	DeferUntil time.Time
+	RetryAfter time.Time
 }
 
 type ProviderSettings struct {
@@ -101,14 +102,18 @@ type ProviderSettings struct {
 	TimeoutSeconds    int    `json:"timeout_seconds"`
 	RequestsPerMinute int    `json:"requests_per_minute"`
 	RequestsPerDay    int    `json:"requests_per_day"`
-	MaxOutputTokens   int    `json:"max_output_tokens"`
+	MaxOutputTokens   int    `json:"max_output_tokens,omitempty"`
 	Enabled           bool   `json:"enabled"`
+	DailyCostMicros   *int64 `json:"daily_cost_micros,omitempty"`
 }
 
 type ProviderInput struct {
 	ProviderSettings
-	APIKey  string `json:"api_key,omitempty"`
-	Version int64  `json:"version,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	Version  int64  `json:"version,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Login    string `json:"login,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
@@ -116,8 +121,11 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 	if !utf8.ValidString(in.Name) || in.Name == "" || utf8.RuneCountInString(in.Name) > 100 || hasControl(in.Name) {
 		return in, invalid("name", "must contain 1 to 100 characters without control characters")
 	}
-	if in.Model == "" || len(in.Model) > 100 || !identifier(in.Model) {
-		return in, invalid("model", "must be an OpenAI model identifier")
+	if in.Kind == "" {
+		in.Kind = ProviderOpenAI
+	}
+	if in.Kind != ProviderOpenAI && in.Kind != ProviderDataForSEO {
+		return in, invalid("kind", "must be openai or dataforseo")
 	}
 	if in.TimeoutSeconds < 1 || in.TimeoutSeconds > 30 {
 		return in, invalid("timeout_seconds", "must be between 1 and 30")
@@ -125,12 +133,39 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 	if in.RequestsPerMinute < 1 || in.RequestsPerMinute > 60 || in.RequestsPerDay < 1 || in.RequestsPerDay > 10000 {
 		return in, invalid("request_budget", "set 1 to 60 requests per minute and 1 to 10000 per UTC day")
 	}
-	if in.MaxOutputTokens < 16 || in.MaxOutputTokens > 4096 {
-		return in, invalid("max_output_tokens", "must be between 16 and 4096")
-	}
-	if creating || in.APIKey != "" {
-		if len(in.APIKey) < 16 || len(in.APIKey) > 512 || strings.ContainsFunc(in.APIKey, func(r rune) bool { return r < '!' || r > '~' }) {
-			return in, invalid("api_key", "must contain 16 to 512 non-whitespace ASCII characters")
+	if in.Kind == ProviderDataForSEO {
+		in.Model, in.MaxOutputTokens = "dataforseo-v3", 0
+		if in.DailyCostMicros == nil || *in.DailyCostMicros < 1 || *in.DailyCostMicros > 100000000000 {
+			return in, invalid("daily_cost_micros", "set a positive daily USD budget in micros")
+		}
+		if in.RequestsPerMinute > 12 {
+			return in, invalid("requests_per_minute", "DataForSEO supports at most 12 requests per minute here")
+		}
+		if in.APIKey != "" {
+			return in, invalid("api_key", "use the DataForSEO login and password fields")
+		}
+		if creating || in.Login != "" || in.Password != "" {
+			if len(in.Login) < 1 || len(in.Login) > 254 ||
+				strings.ContainsFunc(in.Login, func(r rune) bool { return r <= ' ' || r > '~' || r == ':' }) ||
+				len(in.Password) < 1 || len(in.Password) > 512 ||
+				strings.ContainsFunc(in.Password, func(r rune) bool { return r < ' ' || r > '~' }) {
+				return in, invalid("login", "provide a valid DataForSEO login and password together")
+			}
+		}
+	} else {
+		if in.Login != "" || in.Password != "" || in.DailyCostMicros != nil {
+			return in, invalid("kind", "DataForSEO settings require a DataForSEO provider")
+		}
+		if in.Model == "" || len(in.Model) > 100 || !identifier(in.Model) {
+			return in, invalid("model", "must be an OpenAI model identifier")
+		}
+		if in.MaxOutputTokens < 16 || in.MaxOutputTokens > 4096 {
+			return in, invalid("max_output_tokens", "must be between 16 and 4096")
+		}
+		if creating || in.APIKey != "" {
+			if len(in.APIKey) < 16 || len(in.APIKey) > 512 || strings.ContainsFunc(in.APIKey, func(r rune) bool { return r < '!' || r > '~' }) {
+				return in, invalid("api_key", "must contain 16 to 512 non-whitespace ASCII characters")
+			}
 		}
 	}
 	if creating && in.Version != 0 || !creating && in.Version < 1 {

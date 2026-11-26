@@ -1,3 +1,5 @@
+import type { ResearchKind } from "./research";
+
 export type Role = "owner" | "editor" | "viewer";
 export type Principal = { organization_id: string; user_id?: string; email?: string; role: Role };
 export type Site = {
@@ -13,7 +15,7 @@ export type Site = {
 export type Job = {
   id: string;
   site_id: string;
-  kind: "site_inventory" | "site_brief";
+  kind: "site_inventory" | "site_brief" | ResearchKind;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   attempts: number;
   available_at: string;
@@ -22,6 +24,8 @@ export type Job = {
 };
 export type Provider = {
   id: string;
+  kind?: "openai" | "dataforseo";
+  daily_cost_micros?: number;
   name: string;
   model: string;
   timeout_seconds: number;
@@ -53,6 +57,10 @@ const messages: Record<string, string> = {
   member_exists: "该邮箱已在当前组织登记。",
   last_owner: "组织需要保留至少一个有效的所有者。",
   site_inactive: "仅启用状态的站点可以创建任务。",
+  market_not_supported: "当前数据接口不支持此市场组合。",
+  research_evidence_missing: "请先收集当前市场的关键词或 SERP 证据。",
+  provider_credentials_pair: "请同时填写 DataForSEO 登录名和 API 密码。",
+  provider_kind: "请选择此任务所需的 Provider 类型。",
   provider_disabled: "所选 Provider 已停用。",
   provider_name_taken: "当前组织已有相同名称的 Provider。",
   credential_store_unavailable: "服务尚未配置 Provider 凭据加密。",

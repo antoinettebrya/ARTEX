@@ -1,0 +1,47 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.075,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.09,
+      "result_count": 1,
+      "data": {
+        "api": "keywords_data",
+        "function": "search_volume",
+        "se": "google_ads",
+        "location_code": 2840,
+        "language_code": "en",
+        "keywords": [
+          "buy laptop"
+        ]
+      },
+      "result": [
+        {
+          "keyword": "buy laptop",
+          "spell": null,
+          "location_code": 2840,
+          "language_code": "en",
+          "search_partners": false,
+          "competition": "HIGH",
+          "competition_index": 100,
+          "search_volume": 2900,
+          "cpc": 0.85,
+          "monthly_searches": [
+            {
+              "year": 2024,
+              "month": 7,
+              "search_volume": 2900
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

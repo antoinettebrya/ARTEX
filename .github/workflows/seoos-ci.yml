@@ -66,6 +66,7 @@ jobs:
         run: |
           go vet ./...
           go build -trimpath -o bin/seoos ./cmd/seoos
+          go build -trimpath -tags seoos_testfixture -o bin/seoos-fixture ./cmd/seoos
       - name: HTTP and PostgreSQL smoke test
         run: python3 scripts/smoke_test.py
       - name: Local 160-site load test
@@ -81,6 +82,8 @@ jobs:
           npx tsc --noEmit
           npx playwright install --with-deps chromium
       - name: Browser acceptance test
+        env:
+          SEOOS_E2E_RESEARCH: "1"
         run: python3 scripts/test_dashboard.py
       - name: Build isolated container
         run: docker build --tag artex-seoos:ci .

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { isID, type Job, type Provider, seoRequest, type Site } from "@/lib/seo/client";
+import { researchJobLabels } from "@/lib/seo/research";
 
 import { useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
@@ -30,7 +31,7 @@ import {
   useSeoList,
 } from "./shared";
 
-const jobNames = { site_inventory: "站点资料快照", site_brief: "SEO 启动简报" } as const;
+const jobNames = { site_inventory: "站点资料快照", site_brief: "SEO 启动简报", ...researchJobLabels } as const;
 const states = { queued: "排队中", running: "运行中", succeeded: "完成", failed: "失败", cancelled: "已取消" } as const;
 
 const tones = {
@@ -52,7 +53,7 @@ function JobEditor({
   onClose: () => void;
   refresh: () => void;
 }) {
-  const [kind, setKind] = useState<Job["kind"]>("site_inventory");
+  const [kind, setKind] = useState<"site_inventory" | "site_brief">("site_inventory");
   const [key] = useState(() => crypto.randomUUID());
   return (
     <FormDialog
@@ -80,7 +81,7 @@ function JobEditor({
           name="kind"
           className="w-full"
           value={kind}
-          onChange={(event) => setKind(event.target.value as Job["kind"])}
+          onChange={(event) => setKind(event.target.value === "site_brief" ? "site_brief" : "site_inventory")}
         >
           <NativeSelectOption value="site_inventory">{jobNames.site_inventory}</NativeSelectOption>
           {providers.length > 0 && <NativeSelectOption value="site_brief">{jobNames.site_brief}</NativeSelectOption>}
@@ -137,7 +138,7 @@ export function Jobs() {
         </>
       }
     >
-      {editing && (selected.loading || providers.loading) && <PageSkeleton />}
+      {editing && [selected, providers].some((query) => query.loading) && <PageSkeleton />}
       {editing && selected.error !== undefined && <LoadError error={selected.error} retry={selected.refresh} />}
       {editing && providers.error !== undefined && <LoadError error={providers.error} retry={providers.refresh} />}
       <RecordsTable
@@ -179,7 +180,7 @@ export function Jobs() {
         <JobEditor
           key={site}
           site={selected.data.site}
-          providers={providers.data.providers.filter((provider) => provider.enabled)}
+          providers={providers.data.providers.filter((provider) => provider.enabled && provider.kind !== "dataforseo")}
           refresh={list.refresh}
           onClose={close}
         />

@@ -1,6 +1,6 @@
-# ARTEX SEO OS · Phase 1 基础内核
+# ARTEX SEO OS
 
-`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。产品目标详见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)。
+`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。参见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)和 [Phase 2 关键词与 SERP 研究](../docs/seo-os/PHASE2_RESEARCH.md)。
 
 ## 启动
 
@@ -32,7 +32,7 @@ Compose 包含 PostgreSQL 16，并将 API 绑定到 `127.0.0.1:8789`。数据库
 | `SEOOS_API_TOKEN` | 必填，配置组织的操作员凭据，使用随机值 |
 | `SEOOS_ORGANIZATION_NAME` | 首次建立配置组织时的名称，默认 `SEO OS` |
 | `SEOOS_ADDR` | HTTP 地址，默认 `127.0.0.1:8789` |
-| `SEOOS_PROVIDER_KEY` | 32 个随机字节的标准 Base64 编码，配置 OpenAI 凭据时必需 |
+| `SEOOS_PROVIDER_KEY` | 32 个随机字节的标准 Base64 编码，配置 OpenAI 或 DataForSEO 凭据时必需 |
 
 ### Next.js 后台
 
@@ -49,6 +49,8 @@ npm start -- --hostname 127.0.0.1
 访问 `http://127.0.0.1:3000/seo/sites`，使用成员凭据或配置组织的操作员凭据登录。设置 `SEOOS_API_ORIGIN` 会启用 SEO 专用运行模式，后台使用 ARTEX 共用的 App Shell、主题、字体和偏好控件。站点、任务、Provider、成员、审计地址分别为 `/seo/sites`、`/seo/jobs`、`/seo/providers`、`/seo/members`、`/seo/audit`。
 
 `/seo/api/` 在 Next.js 服务端把同源请求转给 SEO Go API。会话凭据保存在有效期 8 小时的 HttpOnly、Secure、SameSite=Lax Cookie 中，作用域是 `/seo`。远程使用请配置 HTTPS，并让反向代理保留请求 Host 和原始协议。同源服务端转发需要 `next start` 或 `next dev`。原应用的静态导出仍可单独构建。
+
+在 `/seo/research` 可以提交和查看关键词拓展、指标、SERP、竞品页面、意图、聚类、Keyword-to-URL 与机会评分。站点详情可直接进入该站点的研究面板。组织所有者先在 Provider 页登记 DataForSEO 登录名、API 密码、请求限额和每日 USD 预算。市场代码、API 契约和回退流程见 [Phase 2 文档](../docs/seo-os/PHASE2_RESEARCH.md)。
 
 
 ## 组织、成员和权限
@@ -130,10 +132,12 @@ python3 scripts/smoke_test.py
 python3 scripts/load_test.py
 (cd ../web && npm ci && npm run build && npx tsc --noEmit && npx playwright install chromium)
 python3 scripts/test_dashboard.py
+go build -trimpath -tags seoos_testfixture -o bin/seoos-fixture ./cmd/seoos
+SEOOS_E2E_RESEARCH=1 python3 scripts/test_dashboard.py
 ```
 
-测试包含角色与跨组织隔离、站点 API 兼容、审计事务、队列幂等与接管、Provider 加密和配额、后台到真实 API 与 PostgreSQL 的浏览器流程。OpenAI HTTP 契约测试使用本地测试服务。实测结果见[验证记录](VALIDATION.md)。
+测试包含角色与跨组织隔离、站点 API 兼容、审计事务、队列幂等与接管、Provider 加密和配额、后台到真实 API 与 PostgreSQL 的浏览器流程。OpenAI 和 DataForSEO HTTP 契约测试使用本地固定响应。实测结果见[验证记录](VALIDATION.md)。
 
 ## 下一阶段
 
-Keyword Intelligence 与 SERP Intelligence 依次补充关键词数据、搜索意图和前十竞品证据。周期调度、行业 Provider、WordPress、内容、媒体和分析模块见产品范围。Phase 0 源码来源和许可审查仍需完成。
+内容生产和 Quality Gate 使用 Phase 2 的意图、聚类、竞品结构、页面映射与评分依据。周期调度、WordPress、媒体和分析模块见产品范围。Phase 0 源码来源和许可审查仍需完成。

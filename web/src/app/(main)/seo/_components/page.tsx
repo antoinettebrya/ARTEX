@@ -10,6 +10,7 @@ import { Audit } from "./audit";
 import { Jobs } from "./jobs";
 import { Members } from "./members";
 import { Providers } from "./providers";
+import { Research } from "./research";
 import { useSeoSession } from "./session";
 import { Sites } from "./sites";
 
@@ -32,6 +33,8 @@ export function SeoPage({ section }: { section: SeoSection }) {
       return <Sites />;
     case "jobs":
       return <Jobs />;
+    case "research":
+      return <Research />;
     case "providers":
       return <Providers />;
     case "members":

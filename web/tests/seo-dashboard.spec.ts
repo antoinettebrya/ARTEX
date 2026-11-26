@@ -61,18 +61,24 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   const updated = page.getByRole("row").filter({ hasText: `${name}（已更新）` });
   await expect(updated).toBeVisible();
   await updated.getByRole("link", { name: /创建任务/ }).click();
+  const jobCreated = page.waitForResponse(
+    (reply) => new URL(reply.url()).pathname === "/seo/api/jobs" && reply.request().method() === "POST",
+  );
   await page.getByRole("dialog", { name: "创建任务" }).getByRole("button", { name: "提交任务" }).click();
+  const { job: inventory } = await (await jobCreated).json();
+  expect(inventory?.id).toBeTruthy();
   const auth = { Authorization: `Bearer ${token}` };
   await expect
     .poll(async () => {
-      const reply = await request.get(`${api}/api/v1/jobs`, { headers: auth });
-      const { jobs } = await reply.json();
-      return jobs[0]?.state;
+      const reply = await request.get(`${api}/api/v1/jobs/${inventory.id}`, { headers: auth });
+      const { job } = await reply.json();
+      return job?.state;
     })
     .toBe("succeeded");
   await page.getByRole("button", { name: "刷新" }).click();
-  await expect(page.getByRole("row").filter({ hasText: "站点资料快照" })).toContainText("完成");
-  await page.getByRole("button", { name: "查看结果" }).click();
+  const inventoryRow = page.getByRole("row").filter({ has: page.getByTitle(inventory.id, { exact: true }) });
+  await expect(inventoryRow).toContainText("完成");
+  await inventoryRow.getByRole("button", { name: "查看结果" }).click();
   await expect(page.getByRole("dialog").locator("pre")).toContainText("dashboard.example.test");
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
 
@@ -83,7 +89,12 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   await provider.getByLabel("OpenAI 模型").fill("test-fixture-model");
   await provider.getByLabel("API 密钥").fill("dashboard-no-network-test-key");
   await provider.getByRole("switch", { name: "启用" }).click();
+  const providerCreated = page.waitForResponse(
+    (reply) => new URL(reply.url()).pathname === "/seo/api/providers" && reply.request().method() === "POST",
+  );
   await provider.getByRole("button", { name: "保存 Provider" }).click();
+  const { provider: addedProvider } = await (await providerCreated).json();
+  expect(addedProvider?.id).toBeTruthy();
   const savedProvider = page.getByRole("row").filter({ hasText: "后台测试配置" });
   await expect(savedProvider).toContainText("停用");
   await savedProvider.getByRole("button", { name: "编辑 后台测试配置" }).click();
@@ -106,7 +117,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   await issuance.getByRole("button", { name: "完成" }).click();
   await page.getByRole("link", { name: "审计日志" }).click();
   await expect(page.getByText("site.update", { exact: true })).toBeVisible();
-  const audit = page.getByRole("row").filter({ hasText: "provider.create" });
+  const audit = page.getByRole("row").filter({ hasText: "provider.create" }).filter({ hasText: addedProvider.id });
   await audit.getByRole("button", { name: "查看记录" }).click();
   await expect(page.getByRole("dialog").locator("pre")).toContainText("后台测试配置");
   await expect(page.getByRole("dialog").locator("pre")).not.toContainText("dashboard-no-network-test-key");

@@ -1,0 +1,145 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "result_count": 1,
+      "cost": 0,
+      "data": {
+        "api": "on_page",
+        "function": "microdata",
+        "url": "https://competitor.example.com/guide",
+        "validate_micromarkup": true
+      },
+      "result": [
+        {
+          "crawl_progress": "finished",
+          "crawl_status": null,
+          "items_count": 3,
+          "items": [
+            {
+              "type": "json_ld",
+              "inspection_info": {
+                "types": [
+                  "FAQPage"
+                ],
+                "fields": [
+                  {
+                    "name": "@type",
+                    "types": null,
+                    "value": "FAQPage",
+                    "fields": null
+                  },
+                  {
+                    "name": "mainEntity",
+                    "types": [
+                      "Thing"
+                    ],
+                    "value": null,
+                    "fields": [
+                      {
+                        "name": "@type",
+                        "types": null,
+                        "value": "https://schema.org/Question",
+                        "fields": null
+                      },
+                      {
+                        "name": "name",
+                        "types": null,
+                        "value": "How long does it last?",
+                        "fields": null
+                      },
+                      {
+                        "name": "acceptedAnswer",
+                        "types": [
+                          "Thing"
+                        ],
+                        "value": null,
+                        "fields": [
+                          {
+                            "name": "@type",
+                            "value": "Answer",
+                            "fields": null
+                          },
+                          {
+                            "name": "text",
+                            "value": "Private raw fixture sentence",
+                            "fields": null
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "type": "json_ld",
+              "inspection_info": {
+                "types": [
+                  "Organization",
+                  "Brand"
+                ],
+                "fields": [
+                  {
+                    "name": "name",
+                    "value": "Competitor Tools"
+                  },
+                  {
+                    "name": "email",
+                    "value": "contact@example.com"
+                  },
+                  {
+                    "name": "brand",
+                    "value": null,
+                    "fields": [
+                      {
+                        "name": "@type",
+                        "value": "Brand"
+                      },
+                      {
+                        "name": "name",
+                        "value": "Guide Brand"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "type": "json_ld",
+              "inspection_info": {
+                "types": [
+                  "Article"
+                ],
+                "fields": [
+                  {
+                    "name": "articleBody",
+                    "value": "Private raw fixture sentence"
+                  },
+                  {
+                    "name": "about",
+                    "value": null,
+                    "fields": [
+                      {
+                        "name": "name",
+                        "value": "A topic mentioned in schema"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

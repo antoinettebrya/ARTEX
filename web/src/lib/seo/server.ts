@@ -10,6 +10,21 @@ const jobPath = new RegExp(`^/jobs/${ID}$`);
 const providerPath = new RegExp(`^/providers/${ID}$`);
 const memberRolePath = new RegExp(`^/members/${ID}/role$`);
 const memberTokenPath = new RegExp(`^/members/${ID}/token$`);
+const snapshotPath = new RegExp(`^/research/snapshots/${ID}$`);
+const researchLists = new Set([
+  "/research/seeds",
+  "/research/suggestions",
+  "/research/keywords",
+  "/research/clusters",
+  "/research/serps",
+  "/research/competitors",
+  "/research/intents",
+  "/research/mappings",
+  "/research/opportunities",
+  "/research/jobs",
+  "/research/pages",
+  "/research/usage",
+]);
 const lists = new Set(["/sites", "/jobs", "/providers", "/members"]);
 const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/seo", maxAge: 8 * 60 * 60 } as const;
@@ -23,9 +38,17 @@ function permits(path: string, method: string): boolean {
   switch (method) {
     case "HEAD":
     case "GET":
-      return lists.has(path) || path === "/me" || path === "/audit" || sitePath.test(path) || jobPath.test(path);
+      return (
+        lists.has(path) ||
+        researchLists.has(path) ||
+        path === "/me" ||
+        path === "/audit" ||
+        sitePath.test(path) ||
+        jobPath.test(path) ||
+        snapshotPath.test(path)
+      );
     case "POST":
-      return lists.has(path) || memberTokenPath.test(path);
+      return lists.has(path) || path === "/research/jobs" || path === "/research/pages" || memberTokenPath.test(path);
     case "PUT":
       return sitePath.test(path) || providerPath.test(path) || memberRolePath.test(path);
     case "DELETE":

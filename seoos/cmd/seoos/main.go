@@ -86,6 +86,10 @@ func run() error {
 		slog.Info("SEO database migrations applied")
 		return nil
 	}
+	researchProvider, err := newResearchProvider()
+	if err != nil {
+		return err
+	}
 	handler, err := api.NewHandler(repo, cfg.OrganizationID, cfg.APIToken)
 	if err != nil {
 		return errors.New("invalid SEO HTTP configuration")
@@ -103,7 +107,7 @@ func run() error {
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
-		worker.Run(ctx, repo)
+		worker.Run(ctx, repo, researchProvider)
 	}()
 	defer func() {
 		stop()

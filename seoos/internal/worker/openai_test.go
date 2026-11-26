@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
+	"github.com/Autumn-27/artex/seoos/internal/researchengine"
 )
 
 func TestOpenAIResponsesContract(t *testing.T) {
@@ -40,6 +41,36 @@ func TestOpenAIResponsesContract(t *testing.T) {
 	var got briefResult
 	if err := json.Unmarshal(outcome.Result, &got); err != nil || outcome.Code != "" || got.Text != "A test brief" || got.OutputTokens != 6 {
 		t.Fatalf("wrong result: %s, %s, %v", outcome.Code, outcome.Result, err)
+	}
+}
+
+func TestOpenAIIntentCorroboratesObservedEvidence(t *testing.T) {
+	call := domain.ProviderCall{APIKey: "fixture-only-intent-credential", Provider: domain.Provider{
+		ProviderSettings: domain.ProviderSettings{Model: "fixture-model", MaxOutputTokens: 256, TimeoutSeconds: 2},
+	}}
+	evidence := domain.KeywordEvidence{Term: "best robot vacuum comparison", SERP: []domain.SERPEntry{
+		{Rank: 1, URL: "https://example.com/review", Title: "Best robot vacuums", PageType: "comparison", Description: "DETAIL_NOT_SENT"},
+		{Rank: 2, URL: "https://example.com/vacuums", Title: "Compare robot vacuums", PageType: "comparison"},
+	}, Pages: []domain.PageEvidence{{Description: "CONTENT_NOT_SENT"}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data struct {
+			Input string `json:"input"`
+			Store bool   `json:"store"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil || data.Store ||
+			!strings.Contains(data.Input, "Best robot vacuums") || strings.Contains(data.Input, "_NOT_SENT") {
+			t.Error("intent provider received something other than bounded ranked evidence")
+		}
+		_, _ = w.Write([]byte(`{"id":"fixture_intent","status":"completed","model":"fixture-model","output":[{"type":"message","content":[{"type":"output_text","text":"{\"primary\":\"transactional\",\"confidence\":1}"}]}]}`))
+	}))
+	defer server.Close()
+	market := domain.Market{CountryCode: "US", LocationCode: 2840, LanguageCode: "en", SearchEngine: "google", Device: "desktop"}
+	signal, outcome := (openAI{endpoint: server.URL}).intent(context.Background(), evidence, market, call)
+	if outcome.Code != "" || signal == nil || signal.Primary != "transactional" || len(signal.Sources) != 2 {
+		t.Fatalf("failed to parse auxiliary signal: %#v, %#v", signal, outcome)
+	}
+	if intent := researchengine.Classify(evidence, signal); intent.Primary != "commercial" {
+		t.Fatalf("model displaced the observed SERP and keyword evidence: %#v", intent)
 	}
 }
 

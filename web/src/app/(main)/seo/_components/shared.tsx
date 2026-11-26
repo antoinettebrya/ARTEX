@@ -49,10 +49,12 @@ type ListState = {
   setOffset: (offset: number) => void;
 };
 
-export function useSeoList<T>(name: "sites" | "jobs" | "providers" | "members" | "events") {
-  const [offset, setOffset] = useState(0);
-  const path = name === "events" ? "audit" : name;
-  const query = useSeoQuery<Record<string, T[]>>(`/${path}?limit=${pageSize + 1}&offset=${offset}`);
+export function useSeoRecords<T>(path: string | null, name: string) {
+  const [position, setPosition] = useState<{ path: string | null; offset: number }>({ path, offset: 0 });
+  const offset = position.path === path ? position.offset : 0;
+  const query = useSeoQuery<Record<string, T[]>>(
+    path ? `${path}${path.includes("?") ? "&" : "?"}limit=${pageSize + 1}&offset=${offset}` : null,
+  );
   const records = query.data?.[name] ?? [];
   return {
     ...query,
@@ -60,8 +62,12 @@ export function useSeoList<T>(name: "sites" | "jobs" | "providers" | "members" |
     offset,
     count: Math.min(records.length, pageSize),
     hasNext: records.length > pageSize && offset + pageSize <= 100000,
-    setOffset,
+    setOffset: (offset: number) => setPosition({ path, offset }),
   };
+}
+
+export function useSeoList<T>(name: "sites" | "jobs" | "providers" | "members" | "events") {
+  return useSeoRecords<T>(name === "events" ? "/audit" : `/${name}`, name);
 }
 
 export function PageFrame({

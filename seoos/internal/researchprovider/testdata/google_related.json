@@ -1,0 +1,71 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.0102,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.0102,
+      "result_count": 1,
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "related_keywords",
+        "se_type": "google",
+        "location_code": 2840,
+        "language_code": "en",
+        "keyword": "phone"
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "seed_keyword": "phone",
+          "seed_keyword_data": null,
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 2,
+          "items_count": 2,
+          "items": [
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "android phone",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "search_volume": 1300,
+                  "cpc": 1.25,
+                  "competition": 0.7
+                },
+                "keyword_properties": {
+                  "keyword_difficulty": 42
+                },
+                "search_intent_info": {
+                  "main_intent": "commercial"
+                }
+              },
+              "depth": 1,
+              "related_keywords": [
+                "best android phone"
+              ]
+            },
+            {
+              "keyword_data": {
+                "keyword": "phone dimensions",
+                "keyword_info": null,
+                "keyword_properties": null,
+                "search_intent_info": null
+              },
+              "depth": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
