@@ -1,9 +1,18 @@
 # ARTEX SEO OS — Phase 0
 
-Status: **IN PROGRESS — audit and legal gate only**
+Status: **IN PROGRESS — legacy audit open; isolated SEO implementation started**
 
 Branch: `seo-os-v1`  
 Baseline: `main` (must remain unchanged)
+
+## Development update — 2026-11-26
+
+The first executable milestone is implemented in the independent `seoos/` Go
+module: an authenticated site API, organization-scoped PostgreSQL storage,
+versioned migrations, concurrency control, and focused tests. Its entrypoint
+does not import the legacy runtime. See `../../../seoos/README.md` for the exact
+implemented scope and development commands. The audit checklist below remains
+open; this milestone does not imply that Phase 0 or the full SEO product is done.
 
 ## Product decision
 
@@ -84,4 +93,5 @@ Phase 0 is complete only when:
 - license and usage restrictions have a documented resolution path;
 - implementation tasks have dependencies, owners, and measurable acceptance criteria.
 
-No application code refactor is authorized by this Phase 0 document.
+This Phase 0 brief describes the legacy audit. Active, additive implementation
+is documented separately in `seoos/`; the legacy product has not yet been removed.

@@ -1,0 +1,31 @@
+name: artex-seoos
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seoos
+      POSTGRES_DB: seoos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - seoos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seoos -d seoos"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SEOOS_DATABASE_URL: postgres://seoos:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/seoos?sslmode=disable
+      SEOOS_ORGANIZATION_ID: ${SEOOS_ORGANIZATION_ID:?Set SEOOS_ORGANIZATION_ID in .env}
+      SEOOS_ORGANIZATION_NAME: ${SEOOS_ORGANIZATION_NAME:-SEO OS}
+      SEOOS_API_TOKEN: ${SEOOS_API_TOKEN:?Set SEOOS_API_TOKEN in .env}
+      SEOOS_ADDR: 0.0.0.0:8789
+    ports:
+      - "127.0.0.1:8789:8789"
+    restart: unless-stopped
+volumes:
+  seoos-postgres:
