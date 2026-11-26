@@ -64,3 +64,20 @@ canonical URL length.
 | 从 `cf39a846` 升级临时数据库 | 老版本登记并将站点更新到 v2，新版本升级后保留 v2 字段和状态，更新到 v3 后审计保留 v2 快照 |
 
 负载测试覆盖 4 个市场和本地站点资料快照，数据经过实际 HTTP、PostgreSQL 和 Worker。Provider HTTP 契约用本地测试服务验证，测试环境未使用真实付费凭据。全站抓取、发布、周期性任务和外部 Provider 的长期负载属于后续验证范围。本机 Docker 守护进程未启动，容器构建由 GitHub Actions 验证。
+
+## ARTEX 后台界面接入验证 · 2026-11-26
+
+设计规范基线为 `4df79121b5434c9de83766d611b654f06b0208c7`。同一份临时 PostgreSQL 数据用于修改前后的应用内浏览器截图。原 ARTEX 的 LLM 页面用仓库自带的前端演示模式作对照。SEO 预览与 E2E 使用实际 Go API 和 PostgreSQL。
+
+- 登录继承原登录框架。站点、任务、Provider、成员、审计使用同一个 ARTEX App Shell 和现有界面组件。
+- 表格接入现有 Card、Table 和 Pagination。站点 API 分页无总条数，界面请求多一条来判断能否翻页。表单用共享 Dialog、Input、NativeSelect、Switch，反馈由现有 Toaster 显示。
+- 浏览器检查 1440 像素桌面与 390 × 844 像素窄屏。检查 Default 浅色和暗色、Brutalist、Soft Pop、Tangerine、Geist Mono 及刷新后的偏好恢复，也检查键盘打开和关闭对话框、移动侧栏自动收起。
+- Go 业务、数据库迁移、原主题样式、字体注册、主题启动脚本及偏好存储的文件差异为空。
+
+| 命令 | 实测结果 |
+| --- | --- |
+| `go test -race -count=1 ./...`、`go vet ./...`、`go build` | 通过，PostgreSQL 集成测试实际运行 |
+| `npm run build:static`、`npm run build`、`npx tsc --noEmit` | 静态导出、生产构建、类型检查通过 |
+| `python3 scripts/test_dashboard.py` | 两条 Chrome E2E 通过，覆盖真实数据读写、同源会话、跨源写入拒绝、角色隔离、导航与主题 |
+| Biome 定向检查 | 21 个新增或抽出的文件通过 |
+| `npm run lint` | 全量前后均报告 84 个错误，仍需单独处理 |

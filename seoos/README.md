@@ -36,15 +36,20 @@ Compose 包含 PostgreSQL 16，并将 API 绑定到 `127.0.0.1:8789`。数据库
 
 ### Next.js 后台
 
-需要 Node.js 22 或更高版本。后台命令在 `seoos/web/` 下运行。
+后台从仓库根目录的 `web/` 启动，需要 Node.js 22 或更高版本。运行前确认上面的 SEO Go API 已就绪。
 
 ```bash
+cd web
 npm ci
 npm run build
-npm start
+export SEOOS_API_ORIGIN=http://127.0.0.1:8789
+npm start -- --hostname 127.0.0.1
 ```
 
-打开 `http://localhost:3000`，使用成员凭据或配置组织的操作员凭据登录。后台通过服务端环境变量 `SEOOS_API_ORIGIN` 访问 Go API，默认 `http://127.0.0.1:8789`。浏览器会话写入有效期 8 小时的 HttpOnly、SameSite=Lax Cookie，生产构建使用 Secure Cookie。站点表单沿用原有站点 API。后台也支持任务提交和取消、Provider 配置、成员角色和凭据管理、组织审计查询。
+访问 `http://127.0.0.1:3000/seo/sites`，使用成员凭据或配置组织的操作员凭据登录。设置 `SEOOS_API_ORIGIN` 会启用 SEO 专用运行模式，后台使用 ARTEX 共用的 App Shell、主题、字体和偏好控件。站点、任务、Provider、成员、审计地址分别为 `/seo/sites`、`/seo/jobs`、`/seo/providers`、`/seo/members`、`/seo/audit`。
+
+`/seo/api/` 在 Next.js 服务端把同源请求转给 SEO Go API。会话凭据保存在有效期 8 小时的 HttpOnly、Secure、SameSite=Lax Cookie 中，作用域是 `/seo`。远程使用请配置 HTTPS，并让反向代理保留请求 Host 和原始协议。同源服务端转发需要 `next start` 或 `next dev`。原应用的静态导出仍可单独构建。
+
 
 ## 组织、成员和权限
 
@@ -123,7 +128,7 @@ go vet ./...
 go build -trimpath -o bin/seoos ./cmd/seoos
 python3 scripts/smoke_test.py
 python3 scripts/load_test.py
-(cd web && npm ci && npm run build && npm run typecheck && npx playwright install chromium)
+(cd ../web && npm ci && npm run build && npx tsc --noEmit && npx playwright install chromium)
 python3 scripts/test_dashboard.py
 ```
 

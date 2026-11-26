@@ -25,7 +25,7 @@ def main():
             SEOOS_E2E_WEB_PORT=address().split(":")[1],
             NEXT_TELEMETRY_DISABLED="1",
         )
-        subprocess.run(["npm", "run", "test:e2e"], cwd=ROOT / "web", env=dashboard_env, check=True)
+        subprocess.run(["npm", "run", "test:e2e"], cwd=ROOT.parent / "web", env=dashboard_env, check=True)
     finally:
         stop(process)
 

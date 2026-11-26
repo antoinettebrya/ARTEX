@@ -1,8 +1,5 @@
-import "server-only";
-import { cookies } from "next/headers";
-
 export type Role = "owner" | "editor" | "viewer";
-export type Principal = { organization_id: string; email?: string; role: Role };
+export type Principal = { organization_id: string; user_id?: string; email?: string; role: Role };
 export type Site = {
   id: string;
   name: string;
@@ -42,15 +39,14 @@ export type AuditEvent = {
   action: string;
   resource_id: string;
   created_at: string;
+  details: unknown;
 };
-export type ActionState = { error?: string; notice?: string; token?: string };
-
-export const cookieName = "seoos_session";
 
 const messages: Record<string, string> = {
-  unauthorized: "请重新登录。",
+  unauthorized: "访问凭据无效或已撤销。",
   invalid_request: "请检查表单中的数据格式与取值。",
   forbidden: "当前账号没有执行此操作的权限。",
+  forbidden_origin: "此页面与服务的地址不一致，请从后台地址重新打开。",
   not_found: "记录不存在或当前组织无权访问。",
   version_conflict: "记录已更新。请刷新页面后再试。",
   conflict: "当前组织已登记相同地址。",
@@ -61,52 +57,46 @@ const messages: Record<string, string> = {
   provider_name_taken: "当前组织已有相同名称的 Provider。",
   credential_store_unavailable: "服务尚未配置 Provider 凭据加密。",
   job_settled: "任务已结束。",
-  idempotency_conflict: "此表单已提交。请刷新页面再创建新任务。",
+  idempotency_conflict: "此表单已提交，请重新打开后再创建任务。",
 };
 
-export class APIError extends Error {
-  constructor(public readonly status: number, code = "") {
-    super(messages[code] ?? "服务暂时无法完成该请求。");
+export class SeoAPIError extends Error {
+  constructor(
+    readonly status: number,
+    code = "",
+  ) {
+    super(Object.hasOwn(messages, code) ? messages[code] : "服务暂时无法完成该请求。");
   }
 }
 
-function apiOrigin() {
-  const url = new URL(process.env.SEOOS_API_ORIGIN ?? "http://127.0.0.1:8789");
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
-      url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Invalid SEOOS_API_ORIGIN");
-  }
-  return url.origin;
-}
-
-export async function sessionToken() {
-  return (await cookies()).get(cookieName)?.value;
-}
-
-export async function api<T>(path: string, token: string, method = "GET", payload?: object): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(apiOrigin() + "/api/v1" + path, {
-      method,
-      headers: {
-        Accept: "application/json",
-        Authorization: "Bearer " + token,
-        ...(payload ? { "Content-Type": "application/json" } : {}),
-      },
-      body: payload ? JSON.stringify(payload) : undefined,
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.timeout(12000),
-    });
-  } catch {
-    throw new APIError(503);
-  }
+export async function seoRequest<T>(
+  path: string,
+  options: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: object; signal?: AbortSignal } = {},
+): Promise<T> {
+  const response = await fetch(`/seo/api${path}`, {
+    method: options.method ?? "GET",
+    headers: {
+      Accept: "application/json",
+      "X-SEOOS-Request": "1",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: "same-origin",
+    cache: "no-store",
+    signal: options.signal,
+  });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: { code?: string } };
-    throw new APIError(response.status, payload.error?.code);
+    const payload: { error?: { code?: string } } | null = await response.json().catch(() => ({}));
+    throw new SeoAPIError(response.status, payload?.error?.code);
   }
-  return response.status === 204 ? (undefined as T) : (await response.json() as T);
+  return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }
+
+export function errorMessage(error: unknown): string {
+  return error instanceof SeoAPIError ? error.message : "暂时无法连接 SEO 服务，请重试。";
+}
+
+export const roles = { owner: "所有者", editor: "编辑者", viewer: "查看者" } as const;
 
 export function isID(value: string): boolean {
   return /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
