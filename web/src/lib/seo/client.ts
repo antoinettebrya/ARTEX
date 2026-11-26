@@ -79,10 +79,10 @@ const messages: Record<string, string> = {
   execution_media_read: "无法读取媒体文件，请重新选择。",
   execution_oauth_response: "授权响应无效。请重新发起 Google 授权。",
   execution_credential_pair: "请提供完整的一组连接凭据。",
-  wordpress_base_url: "请到站点管理核对 WordPress 安装地址。使用 HTTPS 首页地址，保留安装子目录。",
+  wordpress_base_url: "请使用站点管理中相同域名和范围内的 HTTPS 安装地址。保留安装子目录，系统会拼接 /wp-json。",
   wordpress_name: "请输入有效的连接名称（1–120 个字符）。",
   wordpress_username: "请输入生成应用程序密码的 WordPress 用户名。",
-  wordpress_credential: "请填写 WordPress 应用程序密码。更新凭据时请同时填写用户名和应用程序密码。",
+  wordpress_credential: "请填写 WordPress 应用程序密码。更改安装地址或更新凭据时，请同时填写用户名和应用程序密码。",
   wordpress_limits: "请检查 WordPress 的每分钟、每日请求上限和超时设置。",
   crawl_unauthorized: "请让组织所有者先授权本站的读取范围。",
 };

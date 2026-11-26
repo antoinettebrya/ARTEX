@@ -109,10 +109,6 @@ func (s *Store) SaveExecutionConnection(ctx context.Context, org, id string, in 
 			return result, err
 		}
 	}
-	payload, err := json.Marshal(config)
-	if err != nil {
-		return result, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return result, err
@@ -125,10 +121,7 @@ func (s *Store) SaveExecutionConnection(ctx context.Context, org, id string, in 
 	if base != site.BaseURL {
 		return result, domain.ErrVersionConflict
 	}
-	if creating {
-		_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_cms_connections (id,organization_id,site_id,kind,configured_site_url,name,settings,credential)
-			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`, id, org, site.ID, config.Kind, base, config.Name, string(payload), encrypted)
-	} else {
+	if !creating {
 		before, _, same, e := execConnection(ctx, tx, org, site.ID, id, "FOR NO KEY UPDATE OF c")
 		if e != nil {
 			return result, e
@@ -139,9 +132,26 @@ func (s *Store) SaveExecutionConnection(ctx context.Context, org, id string, in 
 		if before.Kind != config.Kind || !same && encrypted == nil {
 			return result, &domain.ValidationError{Field: "credential", Message: "re-authorize a changed site or keep the connection type"}
 		}
+		if config.Kind == domain.ExecutionWordPress {
+			if same && in.BaseURL == "" {
+				config.BaseURL = before.BaseURL
+			}
+			if before.BaseURL != config.BaseURL && encrypted == nil {
+				return result, &domain.ValidationError{Field: "credential", Message: "re-enter credentials for the new WordPress installation"}
+			}
+		}
 		if config.Kind == domain.ExecutionIndexNow && before.KeyLocation != config.KeyLocation && encrypted == nil {
 			return result, &domain.ValidationError{Field: "credential", Message: "rotate the key when its location changes"}
 		}
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return result, err
+	}
+	if creating {
+		_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_cms_connections (id,organization_id,site_id,kind,configured_site_url,name,settings,credential)
+			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`, id, org, site.ID, config.Kind, base, config.Name, string(payload), encrypted)
+	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE public.seo_cms_connections SET configured_site_url=$4,name=$5,settings=$6::jsonb,
 			credential=COALESCE($7,credential),version=version+1,updated_at=clock_timestamp()
 			WHERE organization_id=$1 AND site_id=$2 AND id=$3`, org, site.ID, id, base, config.Name, string(payload), encrypted)
@@ -158,7 +168,7 @@ func (s *Store) SaveExecutionConnection(ctx context.Context, org, id string, in 
 	}
 	if err = audit(ctx, tx, org, "execution.connection.save", id, map[string]any{
 		"site_id": site.ID, "kind": config.Kind, "enabled": config.Enabled, "allow_writes": config.AllowWrites,
-		"credential_rotated": encrypted != nil, "requests_per_day": config.RequestsPerDay,
+		"credential_rotated": encrypted != nil, "requests_per_day": config.RequestsPerDay, "base_url": config.BaseURL,
 	}); err != nil {
 		return result, err
 	}

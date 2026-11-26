@@ -151,6 +151,7 @@ function ConnectionEditor({
           site_id: site.id,
           kind,
           name: field(data, "name").trim(),
+          base_url: wordpress ? field(data, "base_url").trim() : undefined,
           property: field(data, "property").trim() || undefined,
           redirect_uri: isGoogleConnection ? field(data, "redirect_uri").trim() : undefined,
           key_location: kind === "indexnow" ? field(data, "key_location").trim() : undefined,
@@ -205,16 +206,28 @@ function ConnectionEditor({
       {isCMS(kind) && (
         <div className="sm:col-span-2">
           <Field id="execution-connection-url" label={wordpress ? "WordPress 站点地址" : "CMS 站点地址"}>
-            <Input
-              id="execution-connection-url"
-              type="url"
-              value={site.base_url}
-              readOnly
-              aria-describedby="execution-connection-url-hint"
-            />
+            {wordpress ? (
+              <Input
+                id="execution-connection-url"
+                type="url"
+                name="base_url"
+                defaultValue={initial?.base_url ?? site.base_url}
+                required
+                maxLength={2048}
+                aria-describedby="execution-connection-url-hint"
+              />
+            ) : (
+              <Input
+                id="execution-connection-url"
+                type="url"
+                value={site.base_url}
+                readOnly
+                aria-describedby="execution-connection-url-hint"
+              />
+            )}
             <p id="execution-connection-url-hint" className="text-muted-foreground text-xs">
               {wordpress
-                ? "沿用站点管理中的 HTTPS 安装地址，包含子目录（如 /blog）。系统自动拼接 /wp-json。"
+                ? "可填写同站点的 HTTPS 安装子目录。更换域名请先编辑「站点管理」。更改安装地址后须重填凭据。"
                 : "沿用站点管理中的 HTTPS 地址。"}
             </p>
           </Field>

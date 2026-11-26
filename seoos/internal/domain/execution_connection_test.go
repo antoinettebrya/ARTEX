@@ -8,17 +8,23 @@ import (
 
 func TestWordPressConnectionUsesCanonicalRegisteredInstall(t *testing.T) {
 	site := Site{ID: "installed-site", BaseURL: "https://wordpress.example.test/blog"}
-	for _, address := range []string{"", "https://WORDPRESS.example.test:443/blog/"} {
+	for _, tc := range []struct{ address, want string }{
+		{"", site.BaseURL},
+		{"https://WORDPRESS.example.test:443/blog/", site.BaseURL},
+		{"https://wordpress.example.test/blog/cms/", site.BaseURL + "/cms"},
+	} {
 		connection, err := (ExecutionConnectionInput{
-			SiteID: site.ID, Name: strings.Repeat("名", 120), Kind: ExecutionWordPress, BaseURL: address,
+			SiteID: site.ID, Name: strings.Repeat("名", 120), Kind: ExecutionWordPress, BaseURL: tc.address,
 		}).Normalize(site)
-		if err != nil || connection.BaseURL != site.BaseURL {
+		if err != nil || connection.BaseURL != tc.want {
 			t.Fatalf("registered WordPress install rejected: %v", err)
 		}
 	}
 	for _, address := range []string{
 		"https://wordpress.example.test/blog/wp-json",
-		"https://wordpress.example.test/blog/another-site",
+		"https://wordpress.example.test/blog-other",
+		"https://wordpress.example.test/outside",
+		"https://wordpress.example.test/blog%2fcms",
 		"https://untrusted.example.test/blog",
 		"http://wordpress.example.test/blog",
 	} {

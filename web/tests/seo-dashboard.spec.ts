@@ -182,7 +182,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   expect(browserErrors).toEqual([]);
 });
 
-test("WordPress connection uses the registered address and explains URL validation", async ({ page, request }) => {
+test("WordPress installation can be edited within its registered HTTPS site", async ({ page, request }) => {
   const { token, api } = testCredentials();
   async function register(name: string, baseURL: string) {
     const response = await request.post(`${api}/api/v1/sites`, {
@@ -216,13 +216,14 @@ test("WordPress connection uses the registered address and explains URL validati
   );
   await dialog.getByRole("button", { name: "保存连接" }).click();
   expect(await (await invalid).json()).toMatchObject({ error: { code: "invalid_request", field: "base_url" } });
-  await expect(dialog.getByRole("alert")).toContainText("使用 HTTPS 首页地址");
+  await expect(dialog.getByRole("alert")).toContainText("HTTPS 安装地址");
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
 
   dialog = await fillConnection(secure);
   const address = dialog.getByLabel("WordPress 站点地址", { exact: true });
   await expect(address).toHaveValue(secureURL);
-  await expect(address).not.toBeEditable();
+  await expect(address).toBeEditable();
+  await address.fill(`${secureURL}/cms`);
   const saved = page.waitForResponse(
     (res) => new URL(res.url()).pathname === "/seo/api/execution/connections" && res.request().method() === "POST",
   );
@@ -232,13 +233,25 @@ test("WordPress connection uses the registered address and explains URL validati
   const body = await response.json();
   expect(body.connection).toMatchObject({
     kind: "wordpress",
-    base_url: secureURL,
+    base_url: `${secureURL}/cms`,
     configured: true,
     allow_writes: false,
   });
   expect(body.connection.credential).toBeUndefined();
   const row = page.getByRole("row").filter({ hasText: "WordPress 接入测试" });
   await expect(row.getByRole("button", { name: "测试连接" })).toBeVisible();
+  await row.getByRole("button", { name: "编辑", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "编辑连接" });
+  const editAddress = dialog.getByLabel("WordPress 站点地址", { exact: true });
+  await expect(editAddress).toHaveValue(`${secureURL}/cms`);
+  await editAddress.fill(`${secureURL}/new-cms`);
+  await dialog.getByRole("button", { name: "保存连接" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("更改安装地址");
+  await dialog.getByLabel("WordPress 用户名").fill("local-editor");
+  await dialog.getByLabel("WordPress 应用程序密码").fill("abcd efgh ijkl mnop qrst uvwx");
+  await dialog.getByRole("button", { name: "保存连接" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(row).toContainText(`${secureURL}/new-cms`);
 });
 
 test("ARTEX theme presets, font persistence, search, and mobile sidebar work in SEO", async ({ page }) => {

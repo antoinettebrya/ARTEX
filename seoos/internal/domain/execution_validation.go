@@ -19,13 +19,29 @@ func (in ExecutionConnectionInput) Normalize(site Site) (ExecutionConnectionInpu
 	if err != nil || u.Scheme != "https" || u.RawQuery != "" {
 		return in, invalid("base_url", "the registered site must use HTTPS")
 	}
+	address := site.BaseURL
 	if in.BaseURL != "" {
-		address, err := normalizeURL(in.BaseURL)
-		if err != nil || address != site.BaseURL {
+		address, err = normalizeURL(in.BaseURL)
+		if err != nil {
 			return in, invalid("base_url", "use the registered site URL")
 		}
 	}
-	in.BaseURL = site.BaseURL
+	if in.Kind == ExecutionWordPress {
+		target, _ := url.Parse(address)
+		if !BelongsToSite(site.BaseURL, target) || target.ForceQuery ||
+			strings.Contains(strings.ToLower(target.EscapedPath()), "%2f") {
+			return in, invalid("base_url", "use a WordPress installation within the registered HTTPS site")
+		}
+		for _, segment := range strings.Split(target.Path, "/") {
+			switch segment {
+			case "wp-json", "wp-admin", "wp-login.php":
+				return in, invalid("base_url", "enter the WordPress installation root")
+			}
+		}
+	} else if address != site.BaseURL {
+		return in, invalid("base_url", "use the registered site URL")
+	}
+	in.BaseURL = address
 	if in.RequestsPerMinute == 0 {
 		in.RequestsPerMinute = 30
 	}
