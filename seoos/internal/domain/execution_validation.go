@@ -7,19 +7,23 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (in ExecutionConnectionInput) Normalize(site Site) (ExecutionConnectionInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
-	if in.SiteID != site.ID || in.Name == "" || len(in.Name) > 120 || hasControl(in.Name) {
+	if in.SiteID != site.ID || in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 120 || hasControl(in.Name) {
 		return in, invalid("name", "choose a valid site and connection name")
 	}
 	u, err := EvidenceURL(site.BaseURL)
 	if err != nil || u.Scheme != "https" || u.RawQuery != "" {
 		return in, invalid("base_url", "the registered site must use HTTPS")
 	}
-	if in.BaseURL != "" && strings.TrimSuffix(in.BaseURL, "/") != strings.TrimSuffix(site.BaseURL, "/") {
-		return in, invalid("base_url", "use the registered site URL")
+	if in.BaseURL != "" {
+		address, err := normalizeURL(in.BaseURL)
+		if err != nil || address != site.BaseURL {
+			return in, invalid("base_url", "use the registered site URL")
+		}
 	}
 	in.BaseURL = site.BaseURL
 	if in.RequestsPerMinute == 0 {
@@ -102,7 +106,10 @@ func (s ExecutionCredential) Validate(in ExecutionConnectionInput) error {
 	invalidCred := invalid("credential", "provide the connection's complete credential")
 	switch in.Kind {
 	case ExecutionWordPress:
-		if strings.TrimSpace(s.Username) == "" || len(s.Username) > 200 || strings.Contains(s.Username, ":") || strings.TrimSpace(s.Secret) == "" {
+		if strings.TrimSpace(s.Username) == "" || len(s.Username) > 200 || strings.Contains(s.Username, ":") {
+			return invalid("username", "provide a valid WordPress username")
+		}
+		if strings.TrimSpace(s.Secret) == "" {
 			return invalidCred
 		}
 	case ExecutionGeneric, ExecutionBing:

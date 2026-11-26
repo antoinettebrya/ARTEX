@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
+	"github.com/Autumn-27/artex/seoos/internal/providerprobe"
 )
 
 const (
@@ -31,14 +32,20 @@ type handler struct {
 	access           domain.AccessRepository
 	jobs             domain.JobRepository
 	providers        domain.ProviderRepository
+	providerProbe    *providerprobe.Client
 	organizationID   string
 	tokenHash        [sha256.Size]byte
+}
+
+type Fixtures struct {
+	Execution *http.Client
+	Providers *http.Client
 }
 
 // NewHandler keeps the configured credential scoped to its bootstrap organization.
 // Member credentials resolve to their own organization on every API request.
 // The caller must provide TLS when exposing the service outside localhost.
-func NewHandler(repo domain.Repository, organizationID, bearerToken string, executionFixture ...*http.Client) (http.Handler, error) {
+func NewHandler(repo domain.Repository, organizationID, bearerToken string, fixtures ...Fixtures) (http.Handler, error) {
 	if repo == nil {
 		return nil, errors.New("API repository is required")
 	}
@@ -56,11 +63,12 @@ func NewHandler(repo domain.Repository, organizationID, bearerToken string, exec
 	access, _ := repo.(domain.AccessRepository)
 	jobs, _ := repo.(domain.JobRepository)
 	providers, _ := repo.(domain.ProviderRepository)
-	h := &handler{repo: repo, access: access, jobs: jobs, providers: providers, organizationID: organizationID, tokenHash: sha256.Sum256([]byte(bearerToken))}
-	if len(executionFixture) > 0 {
-		h.executionFixture = executionFixture[0]
+	var fixture Fixtures
+	if len(fixtures) > 0 {
+		fixture = fixtures[0]
 	}
-	return h, nil
+	return &handler{repo: repo, access: access, jobs: jobs, providers: providers, organizationID: organizationID,
+		tokenHash: sha256.Sum256([]byte(bearerToken)), executionFixture: fixture.Execution, providerProbe: providerprobe.New(fixture.Providers)}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +332,9 @@ func writeRepositoryError(w http.ResponseWriter, err error) {
 	var validation *domain.ValidationError
 	switch {
 	case errors.As(err, &validation):
-		writeError(w, http.StatusBadRequest, "invalid_request", validation.Field+": "+validation.Message)
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{
+			Code: "invalid_request", Message: validation.Error(), Field: validation.Field,
+		}})
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Site not found.")
 	case errors.Is(err, domain.ErrVersionConflict):
@@ -351,16 +361,18 @@ func writeSite(w http.ResponseWriter, status int, site domain.Site) {
 	}{Site: site})
 }
 
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Field   string `json:"field,omitempty"`
+}
+
+type errorResponse struct {
+	Error apiError `json:"error"`
+}
+
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}{Error: struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}{Code: code, Message: message}})
+	writeJSON(w, status, errorResponse{Error: apiError{Code: code, Message: message}})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

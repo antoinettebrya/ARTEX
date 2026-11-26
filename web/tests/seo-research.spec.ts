@@ -1,7 +1,7 @@
+import { expect, type Locator, type Page, test } from "@playwright/test";
+
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-
-import { expect, type Locator, type Page, test } from "@playwright/test";
 
 test.skip(process.env.SEOOS_E2E_RESEARCH !== "1", "Requires the real SEO service and its loopback DataForSEO fixture");
 test.use({ viewport: { width: 1440, height: 900 } });
@@ -100,18 +100,21 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await expect(page.getByRole("link", { name: siteName, exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Provider", exact: true }).click();
-  await page.getByRole("button", { name: "添加 Provider" }).click();
-  const provider = page.getByRole("dialog", { name: "添加 Provider" });
-  await provider.getByLabel("类型").selectOption("dataforseo");
+  await page.getByRole("tab", { name: "DataForSEO 数据源" }).click();
+  await page.getByRole("button", { name: "添加DataForSEO" }).click();
+  const provider = page.getByRole("dialog", { name: "添加DataForSEO" });
+  await expect(provider.getByLabel("模型厂商")).toHaveCount(0);
   await provider.getByLabel("名称").fill(providerName);
   await provider.getByLabel("DataForSEO 登录名").fill("phase-two-fixture@example.test");
   await provider.getByLabel("DataForSEO API 密码").fill("test-fixture-password-never-used-live");
   await provider.getByLabel("每日费用上限（USD）").fill("10");
   await provider.getByLabel("每分钟请求上限").fill("12");
-  await provider.getByRole("button", { name: "保存 Provider" }).click();
+  await provider.getByRole("button", { name: "保存配置" }).click();
   const providerRecord = page.getByRole("row").filter({ hasText: providerName });
   await expect(providerRecord).toContainText("DataForSEO");
   await expect(providerRecord).not.toContainText("test-fixture-password");
+  await providerRecord.getByRole("button", { name: "测试连接", exact: true }).click();
+  await expect(providerRecord.getByRole("status")).toHaveText(/连接成功（\d+ ms）/);
   await screenshot(page, "phase2-dataforseo-provider.png");
 
   await page.getByRole("link", { name: "SEO 研究", exact: true }).click();

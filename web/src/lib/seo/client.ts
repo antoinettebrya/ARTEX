@@ -66,6 +66,7 @@ const messages: Record<string, string> = {
   provider_kind: "请选择此任务所需的 Provider 类型。",
   provider_disabled: "所选 Provider 已停用。",
   provider_name_taken: "当前组织已有相同名称的 Provider。",
+  provider_test_limited: "已达到该连接的测试次数上限。请稍后再试。",
   credential_store_unavailable: "服务尚未配置 Provider 凭据加密。",
   job_settled: "任务已结束。",
   idempotency_conflict: "此表单已提交，请重新打开后再创建任务。",
@@ -78,13 +79,19 @@ const messages: Record<string, string> = {
   execution_media_read: "无法读取媒体文件，请重新选择。",
   execution_oauth_response: "授权响应无效。请重新发起 Google 授权。",
   execution_credential_pair: "请提供完整的一组连接凭据。",
+  wordpress_base_url: "请到站点管理核对 WordPress 安装地址。使用 HTTPS 首页地址，保留安装子目录。",
+  wordpress_name: "请输入有效的连接名称（1–120 个字符）。",
+  wordpress_username: "请输入生成应用程序密码的 WordPress 用户名。",
+  wordpress_credential: "请填写 WordPress 应用程序密码。更新凭据时请同时填写用户名和应用程序密码。",
+  wordpress_limits: "请检查 WordPress 的每分钟、每日请求上限和超时设置。",
   crawl_unauthorized: "请让组织所有者先授权本站的读取范围。",
 };
 
 export class SeoAPIError extends Error {
   constructor(
     readonly status: number,
-    code = "",
+    readonly code = "",
+    readonly field?: string,
   ) {
     super(Object.hasOwn(messages, code) ? messages[code] : "服务暂时无法完成该请求。");
   }
@@ -107,8 +114,8 @@ export async function seoRequest<T>(
     signal: options.signal,
   });
   if (!response.ok) {
-    const payload: { error?: { code?: string } } | null = await response.json().catch(() => ({}));
-    throw new SeoAPIError(response.status, payload?.error?.code);
+    const payload: { error?: { code?: string; field?: string } } | null = await response.json().catch(() => ({}));
+    throw new SeoAPIError(response.status, payload?.error?.code, payload?.error?.field);
   }
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }

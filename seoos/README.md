@@ -50,6 +50,8 @@ npm start -- --hostname 127.0.0.1
 
 访问 `http://127.0.0.1:3000/seo/sites`，使用成员凭据或配置组织的操作员凭据登录。设置 `SEOOS_API_ORIGIN` 会启用 SEO 专用运行模式，后台使用 ARTEX 共用的 App Shell、主题、字体和偏好控件。站点、任务、Provider、成员、审计地址分别为 `/seo/sites`、`/seo/jobs`、`/seo/providers`、`/seo/members`、`/seo/audit`。
 
+在 Provider 页的「大模型服务」选择 OpenAI、Claude、Gemini 或 DeepSeek，填写该厂商的 API 密钥与模型 ID。需要分配内容生产或独立审核角色时，使用模型行的设置按钮。在「DataForSEO 数据源」使用 DataForSEO API Access 中的登录名和 API 密码，并设置每日 USD 预算。保存后可在记录行点击「测试连接」，查看厂商验证结果。
+
 `/seo/api/` 在 Next.js 服务端把同源请求转给 SEO Go API。会话凭据保存在有效期 8 小时的 HttpOnly、Secure、SameSite=Lax Cookie 中，作用域是 `/seo`。远程使用请配置 HTTPS，并让反向代理保留请求 Host 和原始协议。同源服务端转发需要 `next start` 或 `next dev`。原应用的静态导出仍可单独构建。
 
 在 `/seo/research` 可以提交和查看关键词拓展、指标、SERP、竞品页面、意图、聚类、Keyword-to-URL 与机会评分。站点详情可直接进入该站点的研究面板。组织所有者先在 Provider 页登记 DataForSEO 登录名、API 密码、请求限额和每日 USD 预算。市场代码、API 契约和回退流程见 [Phase 2 文档](../docs/seo-os/PHASE2_RESEARCH.md)。
@@ -91,10 +93,13 @@ Compose 部署可在 `seoos/` 执行 `docker compose exec -T api /usr/local/bin/
 | `PUT /api/v1/members/{id}/role` | 更新角色 |
 | `POST /api/v1/members/{id}/token`、`DELETE /api/v1/members/{id}/token` | 轮换、撤销成员凭据 |
 | `GET /api/v1/audit` | 查询本组织写入与任务状态审计 |
-| `GET /api/v1/providers`、`POST /api/v1/providers` | 列出配置、创建 OpenAI Provider |
+| `GET /api/v1/providers`、`POST /api/v1/providers` | 列出或创建 Provider。列表可用 `category=model` 或 `category=data` 按类型分页，省略时列出所有配置 |
 | `PUT /api/v1/providers/{id}` | 按版本更新 Provider，可保留或轮换密钥 |
+| `POST /api/v1/providers/{id}/test` | 组织所有者可测试已保存配置，包括停用配置。无请求体，返回 `status`、`duration_ms`、`provider_version`。达到测试次数上限时返回 429 |
 | `GET /api/v1/jobs`、`POST /api/v1/jobs` | 列表、提交任务 |
 | `GET /api/v1/jobs/{id}`、`DELETE /api/v1/jobs/{id}` | 读取、取消任务 |
+
+连接测试查询模型目录或 DataForSEO 的账户接口，不提交内容生成或付费研究任务。测试使用独立的每分钟和 UTC 日计数，限值沿用该 Provider 的请求配额，单次超时最长 8 秒。失败后可手动重试。审计记录包含操作者、配置版本、耗时和结果代码。接口不会返回厂商的响应正文或账号数据。测试通过代表凭据可访问这些只读接口。生成任务的权限和研究账户额度由实际业务调用检验。 [OpenAI 模型接口](https://developers.openai.com/api/reference/resources/models/methods/retrieve) · [Claude 模型接口](https://platform.claude.com/docs/en/api/http/models/retrieve) · [Gemini 模型接口](https://ai.google.dev/api/models) · [DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/) · [DataForSEO 账户接口](https://docs.dataforseo.com/v3/appendix/user_data/)
 
 ### 登记站点
 

@@ -181,7 +181,7 @@ func TestPostgresProviderKeyIsolationAndBudget(t *testing.T) {
 	if bytes.Contains(stored, []byte(key)) {
 		t.Fatal("stored credential contains plaintext")
 	}
-	if items, err := s.ListProviders(ctx, other, 10, 0); err != nil || len(items) != 0 {
+	if items, err := s.ListProviders(ctx, other, "", 10, 0); err != nil || len(items) != 0 {
 		t.Fatalf("other organization can list the provider or query failed: %v", err)
 	}
 	input := domain.JobInput{SiteID: otherSite.ID, ProviderID: p.ID, Kind: domain.JobSiteBrief, IdempotencyKey: uuid.NewString()}
@@ -268,5 +268,94 @@ func TestPostgresProviderKeyIsolationAndBudget(t *testing.T) {
 	day, err := s.ReserveProviderCall(ctx, *lease)
 	if err != nil || day.DeferUntil.IsZero() || day.DeferUntil.Hour() != 0 || day.DeferUntil.Location() != time.UTC {
 		t.Fatalf("daily quota does not defer to midnight UTC: %v", err)
+	}
+}
+
+func TestPostgresProviderConnectionTestScopeAndLimits(t *testing.T) {
+	s, ctx, _ := openTestStore(t, true)
+	org := testOrganization(t, s, ctx)
+	other := testOrganization(t, s, ctx)
+	if err := s.SetProviderKey(bytes.Repeat([]byte{17}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	const key = "connection-test-key-not-for-live"
+	p, err := s.SaveProvider(ctx, org, "", domain.ProviderInput{APIKey: key, ProviderSettings: domain.ProviderSettings{
+		Name: "Test model", Model: "fixture-model", TimeoutSeconds: 2, MaxOutputTokens: 128,
+		RequestsPerMinute: 1, RequestsPerDay: 10,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := int64(1_000_000)
+	data, err := s.SaveProvider(ctx, org, "", domain.ProviderInput{
+		Kind: domain.ProviderDataForSEO, Login: "fixture@example.test", Password: "fixture-password",
+		ProviderSettings: domain.ProviderSettings{Name: "Test data", TimeoutSeconds: 2,
+			RequestsPerMinute: 2, RequestsPerDay: 1, DailyCostMicros: &budget},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for category, id := range map[string]string{domain.ProviderCategoryModel: p.ID, domain.ProviderCategoryData: data.ID} {
+		items, err := s.ListProviders(ctx, org, category, 1, 0)
+		if err != nil || len(items) != 1 || items[0].ID != id {
+			t.Fatalf("category %s: %v, %v", category, items, err)
+		}
+	}
+	if _, err := s.ReserveProviderTest(ctx, other, p.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-organization test: %v", err)
+	}
+	results := make(chan error, 4)
+	for range cap(results) {
+		go func() {
+			access, err := s.ReserveProviderTest(ctx, org, p.ID)
+			if err == nil && (access.APIKey != key || access.Provider.ID != p.ID || access.Provider.Enabled) {
+				err = errors.New("wrong credential or provider")
+			}
+			results <- err
+		}()
+	}
+	allowed := 0
+	for range cap(results) {
+		switch err := <-results; {
+		case err == nil:
+			allowed++
+		case !errors.Is(err, domain.ErrProviderTestLimited):
+			t.Fatal(err)
+		}
+	}
+	if allowed != 1 {
+		t.Fatalf("%d tests passed the concurrent check, want one", allowed)
+	}
+	access, err := s.ReserveProviderTest(ctx, org, data.ID)
+	if err != nil || access.Login != "fixture@example.test" || access.Password != "fixture-password" || access.APIKey != "" {
+		t.Fatal("failed to load the saved DataForSEO credential")
+	}
+	if _, err := s.ReserveProviderTest(ctx, org, data.ID); !errors.Is(err, domain.ErrProviderTestLimited) {
+		t.Fatalf("expected the DataForSEO daily cap: %v", err)
+	}
+	res := domain.ProviderTestResult{Status: "ok", DurationMS: 42, ProviderVersion: p.Version}
+	if err := s.RecordProviderTest(ctx, org, p.ID, res); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.ListAudit(ctx, org, 10, 0)
+	if err != nil || len(events) == 0 || events[0].Action != "provider.test_result" {
+		t.Fatalf("expected a provider test outcome in audit: %v", err)
+	}
+	var written domain.ProviderTestResult
+	if err := json.Unmarshal(events[0].Details, &written); err != nil || written != res {
+		t.Fatalf("unexpected audit outcome: %v, %v", written, err)
+	}
+	attempts := 0
+	for _, event := range events {
+		if event.Action == "provider.test" {
+			attempts++
+		}
+	}
+	if attempts != 2 {
+		t.Fatalf("audit contains %d allowed attempts, want two", attempts)
+	}
+	raw, err := json.Marshal(events)
+	if err != nil || bytes.Contains(raw, []byte(key)) || bytes.Contains(raw, []byte("fixture-password")) {
+		t.Fatal("connection audit exposed credential")
 	}
 }

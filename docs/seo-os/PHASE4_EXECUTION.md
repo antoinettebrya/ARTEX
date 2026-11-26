@@ -6,6 +6,8 @@
 
 组织所有者为站点登记 HTTPS 连接。WordPress 使用具备目标内容权限的专用账号和 Application Password。先执行连接检测，确认当前账号可读取或修改文章、页面和媒体。分类与标签从实际 REST 接口读取。通用 CMS 可在注册站点下实现受 Bearer Token 保护的 HTTP 适配接口。WordPress 字段和鉴权仅在 WordPress 适配器内处理。[WordPress 鉴权](https://developer.wordpress.org/rest-api/using-the-rest-api/authentication/) · [通用 CMS HTTP 契约与 WordPress 兼容规则](../../seoos/internal/executioncms/README.md)
 
+新建 WordPress 连接时，后台自动沿用「站点管理」中登记的 HTTPS 安装地址。登记首页时保留安装子目录，例如 `https://example.com/blog`。适配器自动拼接 REST 路径。应用程序密码可在 WordPress 的「用户 → 个人资料 → 应用程序密码」生成。输入对应用户名和密码，启用并保存连接后，在列表中点击「测试连接」。
+
 CMS 写入需要启用连接写权限，并由所有者单独操作。审批包必须属于该组织和站点，且仍对应通过事实核查、独立审核和质量门禁的当前文章版本。创建发布记录后先保存草稿。修改已有文章时另建审阅草稿，原页面在所有者授权前继续提供旧内容。正式发布或预约发布需要填写独立授权理由。预约用于新建内容，依赖 CMS 的计划发布能力。WordPress 应配置有效的前端定时任务或系统 Cron。
 
 `cms_publication` 成功后自动排队 `cms_publication_verify`。即时发布核验可立即运行，预约核验到点后运行。核验重新读取 CMS 记录及匿名访问的最终页面，检查 HTTP、标题、正文、Canonical 及实际可验证的 SEO 字段。支持手动复核。Yoast 或 Rank Math 的 REST 命名空间和编辑 schema 分别检测，只有实际暴露的对应编辑字段可写。发布状态和前后记录包含真实目标 ID 和 URL，CMS JSON 回执加密保留，审计只保存安全标识和状态。[Yoast REST API](https://developer.yoast.com/customization/apis/rest-api/) · [Rank Math REST](https://rankmath.com/kb/headless-cms-support/)

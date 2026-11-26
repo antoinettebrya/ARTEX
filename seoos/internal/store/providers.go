@@ -48,15 +48,25 @@ func scanProvider(row rowScanner, tail ...any) (domain.Provider, error) {
 	return provider, classifyError(err)
 }
 
-func (s *Store) ListProviders(ctx context.Context, orgID string, limit, offset int) ([]domain.Provider, error) {
+func (s *Store) ListProviders(ctx context.Context, orgID, category string, limit, offset int) ([]domain.Provider, error) {
 	if err := validateOrganizationID(orgID); err != nil {
 		return nil, err
 	}
 	if err := domain.ValidatePage(limit, offset); err != nil {
 		return nil, err
 	}
+	var filter string
+	switch category {
+	case "":
+	case domain.ProviderCategoryModel:
+		filter = " AND kind <> 'dataforseo'"
+	case domain.ProviderCategoryData:
+		filter = " AND kind = 'dataforseo'"
+	default:
+		return nil, &domain.ValidationError{Field: "category", Message: "choose model or data"}
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+providerColumns+` FROM public.seo_providers
-		WHERE organization_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, orgID, limit, offset)
+		WHERE organization_id = $1`+filter+` ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, orgID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +163,80 @@ type dataForSEOCredentials struct {
 
 func providerBinding(kind, orgID, id string) []byte {
 	return []byte("seoos/" + kind + "/" + orgID + "/" + id)
+}
+
+// Connection tests are free diagnostic reads with separate request counters.
+// Lock the provider while recording the attempt, then release before network I/O.
+func (s *Store) ReserveProviderTest(ctx context.Context, orgID, id string) (domain.ProviderTestAccess, error) {
+	var access domain.ProviderTestAccess
+	if err := validateOrganizationID(orgID); err != nil {
+		return access, err
+	}
+	if !domain.ValidID(id) {
+		return access, domain.ErrNotFound
+	}
+	if s.providerCipher == nil {
+		return access, domain.ErrProviderNotConfigured
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return access, err
+	}
+	defer tx.Rollback()
+	var sealed []byte
+	p, err := scanProvider(tx.QueryRowContext(ctx, `SELECT `+providerColumns+`, credential FROM public.seo_providers
+		WHERE organization_id=$1 AND id=$2 FOR NO KEY UPDATE`, orgID, id), &sealed)
+	if err != nil {
+		return access, err
+	}
+	var daily, minute int
+	err = tx.QueryRowContext(ctx, `WITH limits AS (
+			SELECT date_trunc('day', statement_timestamp(), 'UTC') AS day_start,
+				statement_timestamp() - interval '1 minute' AS minute_start
+		)
+		SELECT count(*) FILTER (WHERE created_at >= day_start), count(*) FILTER (WHERE created_at > minute_start)
+		FROM public.seo_audit_events CROSS JOIN limits
+		WHERE organization_id=$1 AND resource_id=$2 AND action='provider.test'
+			AND created_at >= least(day_start, minute_start)`, orgID, id).Scan(&daily, &minute)
+	if err != nil {
+		return access, err
+	}
+	if daily >= p.RequestsPerDay || minute >= p.RequestsPerMinute {
+		return access, domain.ErrProviderTestLimited
+	}
+	secret, err := s.providerCipher.Open(nil, nil, sealed, providerBinding(p.Kind, orgID, id))
+	if err != nil || len(secret) == 0 {
+		return access, domain.ErrProviderNotConfigured
+	}
+	access.Provider = p
+	if p.Kind == domain.ProviderDataForSEO {
+		var credentials dataForSEOCredentials
+		if json.Unmarshal(secret, &credentials) != nil || credentials.Login == "" || credentials.Password == "" {
+			return domain.ProviderTestAccess{}, domain.ErrProviderNotConfigured
+		}
+		access.Login, access.Password = credentials.Login, credentials.Password
+	} else {
+		access.APIKey = string(secret)
+	}
+	if err := audit(ctx, tx, orgID, "provider.test", id, map[string]int64{"provider_version": p.Version}); err != nil {
+		return domain.ProviderTestAccess{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.ProviderTestAccess{}, err
+	}
+	return access, nil
+}
+
+func (s *Store) RecordProviderTest(ctx context.Context, orgID, id string, result domain.ProviderTestResult) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := audit(ctx, tx, orgID, "provider.test_result", id, result); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ReserveProviderCall serializes spend per provider. Failed and interrupted

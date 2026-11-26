@@ -106,9 +106,16 @@ function readCredentials(kind: ConnectionKind, data: FormData): Credentials | un
     return { client_id: clientID, client_secret: clientSecret };
   }
   if (!username && !secret) return undefined;
-  if (!secret || (kind === "wordpress" && !username)) throw new SeoAPIError(400, "execution_credential_pair");
-  return kind === "wordpress" ? { username, secret } : { secret };
+  if (kind === "wordpress") {
+    if (!username || username.includes(":")) throw new SeoAPIError(400, "wordpress_username");
+    if (!secret) throw new SeoAPIError(400, "wordpress_credential");
+    return { username, secret };
+  }
+  if (!secret) throw new SeoAPIError(400, "execution_credential_pair");
+  return { secret };
 }
+
+const wordpressFields = new Set(["base_url", "name", "username", "credential", "limits"]);
 
 function ConnectionEditor({
   site,
@@ -122,12 +129,13 @@ function ConnectionEditor({
   onSaved: (connection: Connection) => void;
 }) {
   const [kind, setKind] = useState<ConnectionKind>(initial?.kind ?? site.cms);
+  const wordpress = kind === "wordpress";
   const isGoogleConnection = isGoogle(kind);
   const writesAvailable = isCMS(kind) || kind === "bing" || kind === "indexnow";
   const name = initial?.name;
   const title = initial ? "编辑连接" : "新建连接";
   const credentialLabel: Partial<Record<ConnectionKind, string>> = {
-    wordpress: "WordPress Application Password",
+    wordpress: "WordPress 应用程序密码",
     generic: "CMS 访问令牌",
   };
   const defaultReturn = typeof window === "undefined" ? "" : new URL("/seo/execution", window.location.origin).href;
@@ -143,7 +151,6 @@ function ConnectionEditor({
           site_id: site.id,
           kind,
           name: field(data, "name").trim(),
-          base_url: isCMS(kind) ? field(data, "base_url").trim() || undefined : undefined,
           property: field(data, "property").trim() || undefined,
           redirect_uri: isGoogleConnection ? field(data, "redirect_uri").trim() : undefined,
           key_location: kind === "indexnow" ? field(data, "key_location").trim() : undefined,
@@ -153,15 +160,28 @@ function ConnectionEditor({
           requests_per_day: Number(field(data, "requests_per_day")),
           timeout_seconds: Number(field(data, "timeout_seconds")),
         };
-        const { connection } = await seoRequest<{ connection: Connection }>(
-          initial ? `/execution/connections/${initial.id}` : "/execution/connections",
-          {
-            method: initial ? "PUT" : "POST",
-            body: { ...settings, credential: readCredentials(kind, data), version: initial?.version },
-          },
-        );
-        onSaved(connection);
-        toast.success("连接已保存");
+        try {
+          const { connection } = await seoRequest<{ connection: Connection }>(
+            initial ? `/execution/connections/${initial.id}` : "/execution/connections",
+            {
+              method: initial ? "PUT" : "POST",
+              body: { ...settings, credential: readCredentials(kind, data), version: initial?.version },
+            },
+          );
+          onSaved(connection);
+          toast.success("连接已保存");
+        } catch (error) {
+          if (
+            wordpress &&
+            error instanceof SeoAPIError &&
+            error.code === "invalid_request" &&
+            error.field &&
+            wordpressFields.has(error.field)
+          ) {
+            throw new SeoAPIError(error.status, `wordpress_${error.field}`);
+          }
+          throw error;
+        }
       }}
     >
       <Field id="execution-connection-kind" label="连接类型">
@@ -184,15 +204,19 @@ function ConnectionEditor({
       </Field>
       {isCMS(kind) && (
         <div className="sm:col-span-2">
-          <Field id="execution-connection-url" label="CMS 站点地址">
+          <Field id="execution-connection-url" label={wordpress ? "WordPress 站点地址" : "CMS 站点地址"}>
             <Input
               id="execution-connection-url"
               type="url"
-              name="base_url"
-              placeholder={site.base_url}
-              defaultValue={initial?.base_url}
-              maxLength={2048}
+              value={site.base_url}
+              readOnly
+              aria-describedby="execution-connection-url-hint"
             />
+            <p id="execution-connection-url-hint" className="text-muted-foreground text-xs">
+              {wordpress
+                ? "沿用站点管理中的 HTTPS 安装地址，包含子目录（如 /blog）。系统自动拼接 /wp-json。"
+                : "沿用站点管理中的 HTTPS 地址。"}
+            </p>
           </Field>
         </div>
       )}
@@ -265,13 +289,13 @@ function ConnectionEditor({
           </Field>
         </div>
       )}
-      {kind === "wordpress" && (
+      {wordpress && (
         <Field id="execution-wordpress-user" label="WordPress 用户名">
           <Input id="execution-wordpress-user" name="username" maxLength={200} required={!initial} />
         </Field>
       )}
       {!isGoogleConnection && (
-        <div className={kind === "wordpress" ? undefined : "sm:col-span-2"}>
+        <div className={wordpress ? undefined : "sm:col-span-2"}>
           <Field id="execution-connection-secret" label={credentialLabel[kind] ?? "API 密钥"}>
             <Input
               id="execution-connection-secret"
@@ -280,7 +304,13 @@ function ConnectionEditor({
               autoComplete="new-password"
               maxLength={kind === "indexnow" ? 128 : 4096}
               required={!initial}
+              aria-describedby={wordpress ? "execution-wordpress-password-hint" : undefined}
             />
+            {wordpress && (
+              <p id="execution-wordpress-password-hint" className="text-muted-foreground text-xs">
+                在 WordPress 的「用户 → 个人资料 → 应用程序密码」生成。启用并保存后可测试连接。
+              </p>
+            )}
           </Field>
         </div>
       )}

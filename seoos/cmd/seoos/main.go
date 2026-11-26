@@ -158,7 +158,12 @@ func readinessProbe(address string) error {
 }
 
 func serveHTTP(ctx context.Context, repo *store.Store, cfg config.Config, executionFixture *http.Client) error {
-	handler, err := api.NewHandler(repo, cfg.OrganizationID, cfg.APIToken, executionFixture)
+	providerFixture, err := newProviderTestFixture()
+	if err != nil {
+		return err
+	}
+	handler, err := api.NewHandler(repo, cfg.OrganizationID, cfg.APIToken,
+		api.Fixtures{Execution: executionFixture, Providers: providerFixture})
 	if err != nil {
 		return errors.New("invalid SEO HTTP configuration")
 	}

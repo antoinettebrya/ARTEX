@@ -121,8 +121,8 @@ func readObject[T any](w http.ResponseWriter, r *http.Request, input **T) bool {
 	return true
 }
 
-func readPage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
-	if !checkQuery(w, r, "limit", "offset") {
+func readPage(w http.ResponseWriter, r *http.Request, filters ...string) (limit, offset int, ok bool) {
+	if !checkQuery(w, r, append([]string{"limit", "offset"}, filters...)...) {
 		return 0, 0, false
 	}
 	limit, err := queryInt(r, "limit", 50, 1, 200)

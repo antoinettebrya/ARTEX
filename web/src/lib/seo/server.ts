@@ -8,6 +8,7 @@ const ID = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 const sitePath = new RegExp(`^/sites/${ID}$`);
 const jobPath = new RegExp(`^/jobs/${ID}$`);
 const providerPath = new RegExp(`^/providers/${ID}$`);
+const providerTestPath = new RegExp(`^/providers/${ID}/test$`);
 const memberRolePath = new RegExp(`^/members/${ID}/role$`);
 const memberTokenPath = new RegExp(`^/members/${ID}/token$`);
 const snapshotPath = new RegExp(`^/research/snapshots/${ID}$`);
@@ -97,6 +98,7 @@ function permits(path: string, method: string): boolean {
         path === "/execution/oauth/start" ||
         path === "/execution/oauth/exchange" ||
         contentActionPath.test(path) ||
+        providerTestPath.test(path) ||
         memberTokenPath.test(path)
       );
     case "PUT":
@@ -222,7 +224,8 @@ export async function seoProxy(request: NextRequest, origin: string, path: strin
 
     const token = request.cookies.get(SESSION_COOKIE)?.value;
     if (!token || !ACCEPTED_TOKEN.test(token)) return problem(401, "unauthorized");
-    const expectsBody = (method === "POST" || method === "PUT") && !memberTokenPath.test(path);
+    const expectsBody =
+      (method === "POST" || method === "PUT") && !memberTokenPath.test(path) && !providerTestPath.test(path);
     const bodyLimit = path === "/execution/jobs" ? maxExecutionJobBodyBytes : maxBodyBytes;
     const body = expectsBody ? await readBody(request, bodyLimit) : undefined;
     const response = await upstream(origin, path + request.nextUrl.search, token, method, body);

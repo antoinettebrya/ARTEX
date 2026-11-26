@@ -48,7 +48,18 @@ def main():
                 dashboard_env["SEOOS_E2E_CONTENT"] = "1"
             if editorial:
                 dashboard_env["SEOOS_E2E_CONTENT_FIXTURE"] = editorial.origin
+            if upstream:
+                dashboard_env["SEOOS_E2E_PROVIDER_TEST"] = "1"
             subprocess.run(["npm", "run", "test:e2e"], cwd=smoke_test.ROOT.parent / "web", env=dashboard_env, check=True)
+            if upstream:
+                expected_checks = {
+                    ("api.openai.com", "/v1/models/test-fixture-model"): 1,
+                    ("api.openai.com", "/v1/models/missing-fixture-model"): 1,
+                }
+                if research:
+                    expected_checks[("api.dataforseo.com", "/v3/appendix/user_data")] = 1
+                assert upstream.server.checks == expected_checks, upstream.server.checks
+                print(f"PASS: {sum(expected_checks.values())} read-only provider checks against the HTTP fixture")
             if integration:
                 calls = integration.calls
                 assert calls[(CMS_HOST, "POST", CMS_PREFIX + "/pages")] == 1, calls

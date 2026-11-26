@@ -2,16 +2,18 @@
 
 import { useState } from "react";
 
-import { Pencil, Plus, RefreshCw, Settings2 } from "lucide-react";
+import { Pencil, Plug, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { type Provider, type ProviderKind, SeoAPIError, seoRequest } from "@/lib/seo/client";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { errorMessage, type Provider, type ProviderKind, SeoAPIError, seoRequest } from "@/lib/seo/client";
 import { usd } from "@/lib/seo/research";
 
 import { ModelProfileEditor } from "./content/forms";
@@ -27,16 +29,32 @@ import {
   PageSkeleton,
   RecordsTable,
   StateBadge,
-  useSeoList,
+  useSeoRecords,
 } from "./shared";
 
-const providerNames: Record<ProviderKind, string> = {
+const modelNames: Record<Exclude<ProviderKind, "dataforseo">, string> = {
   openai: "OpenAI",
   anthropic: "Claude",
   gemini: "Gemini",
   deepseek: "DeepSeek",
-  dataforseo: "DataForSEO",
 };
+
+type ProviderCategory = "model" | "data";
+
+const providerCategories = {
+  model: {
+    label: "大模型服务",
+    item: "大模型",
+    description: "用于内容工作室等 AI 任务。测试时检查 API 密钥及所填模型的访问权限。",
+    limit: "单次输出上限",
+  },
+  data: {
+    label: "DataForSEO 数据源",
+    item: "DataForSEO",
+    description: "用于关键词、搜索量和 SERP 研究。测试时验证 DataForSEO API 账号。",
+    limit: "每日费用上限（USD）",
+  },
+} satisfies Record<ProviderCategory, { label: string; item: string; description: string; limit: string }>;
 
 type ContentUsage = {
   provider_id: string;
@@ -57,16 +75,19 @@ function limitLabel(provider: Provider) {
 }
 
 function ProviderEditor({
+  category,
   provider,
   onClose,
   onSaved,
 }: {
+  category: ProviderCategory;
   provider?: Provider;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [kind, setKind] = useState<ProviderKind>(provider?.kind ?? "openai");
-  const isData = kind === "dataforseo";
+  const [kind, setKind] = useState(provider?.kind && provider.kind !== "dataforseo" ? provider.kind : "openai");
+  const isData = category === "data";
+  const { item } = providerCategories[category];
 
   async function save(data: FormData) {
     const login = field(data, "login").trim();
@@ -76,7 +97,7 @@ function ProviderEditor({
     }
     const providerSettings = isData
       ? {
-          kind,
+          kind: "dataforseo",
           login: login || undefined,
           password: password || undefined,
           daily_cost_micros: Math.round(Number(field(data, "daily_cost")) * 1_000_000),
@@ -100,32 +121,38 @@ function ProviderEditor({
       },
     });
     onSaved();
-    toast.success("Provider 已保存");
+    toast.success("配置已保存，可在列表中测试连接。");
   }
 
   return (
     <FormDialog
-      title={provider ? "编辑 Provider" : "添加 Provider"}
-      description="设置凭据和请求限制。每日配额以 UTC 日为准。"
-      submitLabel="保存 Provider"
+      title={`${provider ? "编辑" : "添加"}${item}`}
+      description={
+        isData
+          ? "凭据取自 DataForSEO 后台的 API Access。每日费用和请求配额按 UTC 计算。"
+          : "填入所选厂商的 API 密钥和模型 ID。每日请求配额按 UTC 计算。"
+      }
+      submitLabel="保存配置"
       onSubmit={save}
       onClose={onClose}
     >
-      <Field id="provider-kind" label="类型">
-        <NativeSelect
-          id="provider-kind"
-          value={kind}
-          disabled={!!provider}
-          className="w-full"
-          onChange={(event) => setKind(event.target.value as ProviderKind)}
-        >
-          {Object.entries(providerNames).map(([value, label]) => (
-            <NativeSelectOption value={value} key={value}>
-              {label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </Field>
+      {!isData && (
+        <Field id="provider-kind" label="模型厂商">
+          <NativeSelect
+            id="provider-kind"
+            value={kind}
+            disabled={!!provider}
+            className="w-full"
+            onChange={(event) => setKind(event.target.value as typeof kind)}
+          >
+            {Object.entries(modelNames).map(([value, label]) => (
+              <NativeSelectOption value={value} key={value}>
+                {label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </Field>
+      )}
       <Field id="provider-name" label="名称">
         <Input id="provider-name" name="name" required maxLength={100} defaultValue={provider?.name} />
       </Field>
@@ -167,7 +194,7 @@ function ProviderEditor({
         </>
       ) : (
         <>
-          <Field id="provider-model" label={`${providerNames[kind]} 模型`}>
+          <Field id="provider-model" label={`${modelNames[kind]} 模型 ID`}>
             <Input id="provider-model" name="model" required maxLength={100} defaultValue={provider?.model} />
           </Field>
           <Field id="provider-key" label="API 密钥">
@@ -237,28 +264,47 @@ function ProviderEditor({
 }
 
 export function Providers() {
+  return (
+    <PageFrame title="Provider" description="管理大模型和 SEO 数据源的凭据、配额及连接状态。">
+      <Tabs defaultValue="model">
+        <TabsList aria-label="服务类型">
+          <TabsTrigger value="model">{providerCategories.model.label}</TabsTrigger>
+          <TabsTrigger value="data">{providerCategories.data.label}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="model">
+          <ProviderPanel category="model" />
+        </TabsContent>
+        <TabsContent value="data">
+          <ProviderPanel category="data" />
+        </TabsContent>
+      </Tabs>
+    </PageFrame>
+  );
+}
+
+function ProviderPanel({ category }: { category: ProviderCategory }) {
   const { principal } = useSeoSession();
   const owner = principal.role === "owner";
-  const list = useSeoList<Provider>("providers");
+  const isData = category === "data";
+  const { label, item, description, limit } = providerCategories[category];
+  const list = useSeoRecords<Provider>(`/providers?category=${category}`, "providers");
   const [edit, setEdit] = useState<Provider | null>();
   const [model, setModel] = useState<Provider>();
 
   return (
-    <PageFrame
-      title="Provider"
-      description="管理模型和数据服务的调用配额与预算。"
-      actions={
-        owner && (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-muted-foreground text-sm">{description}</p>
+        {owner && (
           <Button variant="outline" size="sm" onClick={() => setEdit(null)}>
-            <Plus /> 添加 Provider
+            <Plus /> 添加{item}
           </Button>
-        )
-      }
-    >
+        )}
+      </div>
       <RecordsTable
-        label="已配置的 Provider"
-        columns={["Provider", "每分钟 / 每日请求", "输出上限 / 日预算", "超时", "状态", ...(owner ? ["操作"] : [])]}
-        empty="暂无 Provider"
+        label={label}
+        columns={[isData ? "数据源" : "模型", "每分钟 / 每日请求", limit, "超时", "状态", ...(owner ? ["操作"] : [])]}
+        empty={`暂无${item}配置`}
         list={list}
       >
         {list.records.map((provider) => (
@@ -268,7 +314,7 @@ export function Providers() {
               <code className="font-mono text-muted-foreground text-xs">
                 {provider.kind === "dataforseo"
                   ? "DataForSEO"
-                  : `${providerNames[provider.kind ?? "openai"]} · ${provider.model}`}
+                  : `${modelNames[provider.kind ?? "openai"]} · ${provider.model}`}
               </code>
             </TableCell>
             <TableCell className="px-3 tabular-nums">
@@ -283,36 +329,100 @@ export function Providers() {
               />
             </TableCell>
             {owner && (
-              <TableCell className="px-3">
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`编辑 ${provider.name}`}
-                  onClick={() => setEdit(provider)}
-                >
-                  <Pencil />
-                </Button>
-                {provider.kind !== "dataforseo" && (
+              <TableCell className="px-3 py-2">
+                <div className="flex items-center gap-1">
+                  <ProviderConnectionTest key={`${provider.id}:${provider.version}`} provider={provider} />
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={`配置 ${provider.name} 内容模型`}
-                    onClick={() => setModel(provider)}
+                    aria-label={`编辑 ${provider.name}`}
+                    onClick={() => setEdit(provider)}
                   >
-                    <Settings2 />
+                    <Pencil />
                   </Button>
-                )}
+                  {!isData && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={`配置 ${provider.name} 内容模型`}
+                      onClick={() => setModel(provider)}
+                    >
+                      <Settings2 />
+                    </Button>
+                  )}
+                </div>
               </TableCell>
             )}
           </TableRow>
         ))}
       </RecordsTable>
-      {owner && <ContentModelUsage />}
+      {owner && !isData && <ContentModelUsage />}
       {edit !== undefined && owner && (
-        <ProviderEditor provider={edit ?? undefined} onClose={() => setEdit(undefined)} onSaved={list.refresh} />
+        <ProviderEditor
+          category={category}
+          provider={edit ?? undefined}
+          onClose={() => setEdit(undefined)}
+          onSaved={list.refresh}
+        />
       )}
       {model && owner && <ModelProfileEditor provider={model} onClose={() => setModel(undefined)} />}
-    </PageFrame>
+    </section>
+  );
+}
+
+const connectionMessages: Record<string, string> = {
+  invalid_credentials: "厂商拒绝了凭据，请检查密钥或 API 登录信息。",
+  access_denied: "厂商拒绝访问，请检查账号或项目权限。",
+  address_not_allowed: "DataForSEO 拒绝了当前服务器的 IP，请检查 API Access 中的 IP 白名单。",
+  account_unverified: "请先在 DataForSEO 后台完成账号验证。",
+  insufficient_balance: "厂商返回余额不足，请检查账单。",
+  model_not_found: "在厂商处查不到该模型，请核对模型 ID 和访问权限。",
+  model_unsupported: "该 Gemini 模型不支持文本生成。",
+  upstream_rate_limited: "厂商触发了限流，请稍后再试。",
+  timeout: "连接厂商超时，请稍后重试。",
+  unavailable: "暂时无法连接厂商，请稍后重试。",
+  cancelled: "连接测试已取消。",
+};
+
+function ProviderConnectionTest({ provider }: { provider: Provider }) {
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; message: string }>();
+
+  async function testConnection() {
+    setPending(true);
+    setFeedback(undefined);
+    try {
+      const result = await seoRequest<{ status: string; duration_ms: number; provider_version: number }>(
+        `/providers/${provider.id}/test`,
+        { method: "POST" },
+      );
+      if (result.provider_version !== provider.version) throw new SeoAPIError(409, "version_conflict");
+      const ok = result.status === "ok";
+      setFeedback({
+        ok,
+        message: ok
+          ? `连接成功（${result.duration_ms} ms）`
+          : (connectionMessages[result.status] ?? "厂商返回了无法识别的响应。"),
+      });
+    } catch (error) {
+      setFeedback({ ok: false, message: errorMessage(error) });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="min-w-0">
+      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={testConnection}>
+        {pending ? <Spinner aria-hidden="true" /> : <Plug />} {pending ? "测试中…" : "测试连接"}
+      </Button>
+      <div
+        role="status"
+        className={`max-w-48 whitespace-normal text-xs ${feedback?.ok ? "text-foreground" : "text-destructive"}`}
+      >
+        {feedback?.message}
+      </div>
+    </div>
   );
 }
 

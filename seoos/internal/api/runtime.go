@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 )
@@ -20,9 +22,10 @@ func (h *handler) serveRuntime(w http.ResponseWriter, r *http.Request, principal
 	case h.providers != nil && path == providers:
 		switch {
 		case readMethod(r.Method):
-			limit, offset, ok := readPage(w, r)
+			limit, offset, ok := readPage(w, r, "category")
 			if ok {
-				providers, err := h.providers.ListProviders(r.Context(), principal.OrganizationID, limit, offset)
+				category := r.URL.Query().Get("category")
+				providers, err := h.providers.ListProviders(r.Context(), principal.OrganizationID, category, limit, offset)
 				writeRuntimeResult(w, http.StatusOK, map[string]any{"providers": providers}, err)
 			}
 		case r.Method == http.MethodPost:
@@ -31,9 +34,11 @@ func (h *handler) serveRuntime(w http.ResponseWriter, r *http.Request, principal
 			methodNotAllowed(w, "GET, HEAD, POST")
 		}
 	case h.providers != nil && strings.HasPrefix(path, providers+"/"):
-		id := strings.TrimPrefix(path, providers+"/")
+		id, test := strings.CutSuffix(strings.TrimPrefix(path, providers+"/"), "/test")
 		if !domain.ValidID(id) {
 			writeError(w, http.StatusNotFound, "not_found", "Provider not found.")
+		} else if test {
+			h.testProvider(w, r, principal, id)
 		} else if r.Method != http.MethodPut {
 			methodNotAllowed(w, "PUT")
 		} else {
@@ -43,6 +48,36 @@ func (h *handler) serveRuntime(w http.ResponseWriter, r *http.Request, principal
 		return false
 	}
 	return true
+}
+
+func (h *handler) testProvider(w http.ResponseWriter, r *http.Request, principal domain.Principal, id string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	if principal.Role != domain.RoleOwner {
+		forbidden(w)
+		return
+	}
+	if !checkQuery(w, r) {
+		return
+	}
+	access, err := h.providers.ReserveProviderTest(r.Context(), principal.OrganizationID, id)
+	if err != nil {
+		writeRuntimeResult(w, http.StatusOK, nil, err)
+		return
+	}
+	start := time.Now()
+	result := domain.ProviderTestResult{
+		Status:          h.providerProbe.Test(r.Context(), access),
+		DurationMS:      time.Since(start).Milliseconds(),
+		ProviderVersion: access.Provider.Version,
+	}
+	// Complete the audit if the browser closes while the provider is responding.
+	auditContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+	defer cancel()
+	err = h.providers.RecordProviderTest(auditContext, principal.OrganizationID, id, result)
+	writeRuntimeResult(w, http.StatusOK, result, err)
 }
 
 func (h *handler) jobsCollection(w http.ResponseWriter, r *http.Request, principal domain.Principal) {
@@ -134,6 +169,8 @@ func writeRuntimeResult(w http.ResponseWriter, status int, value any, err error)
 		writeError(w, http.StatusConflict, "provider_name_taken", "A provider with this name already exists.")
 	case errors.Is(err, domain.ErrProviderNotConfigured):
 		writeError(w, http.StatusServiceUnavailable, "credential_store_unavailable", "Provider credential storage is unavailable.")
+	case errors.Is(err, domain.ErrProviderTestLimited):
+		writeError(w, http.StatusTooManyRequests, "provider_test_limited", "The connection test limit has been reached.")
 	case errors.Is(err, domain.ErrVersionConflict):
 		writeError(w, http.StatusConflict, "version_conflict", "Provider has changed. Reload it before updating.")
 	default:

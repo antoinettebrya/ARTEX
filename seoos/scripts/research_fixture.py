@@ -1,4 +1,4 @@
-"""Fixed, loopback-only DataForSEO response fixtures for the browser suite."""
+"""Fixed, loopback-only search and provider-check responses for the browser suite."""
 
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,6 +91,26 @@ def microdata_results():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        host = self.headers.get("X-SEOOS-Fixture-Host")
+        auth = self.headers.get("Authorization")
+        with self.server.call_lock:
+            self.server.checks[(host, self.path)] += 1
+        if host == "api.dataforseo.com" and self.path == "/v3/appendix/user_data":
+            encoded = base64.b64encode(f"{LOGIN}:{PASSWORD}".encode()).decode()
+            if auth != f"Basic {encoded}":
+                return self.write_json(200, {"status_code": 40100})
+            return self.write_json(200, {"status_code": 20000, "cost": 0, "tasks": [
+                {"status_code": 20000, "result_count": 1, "result": [{"login": LOGIN}]},
+            ]})
+        if host == "api.openai.com" and self.path.startswith("/v1/models/"):
+            if auth != "Bearer dashboard-no-network-test-key":
+                return self.write_json(401, {"error": {"message": "fixture credential rejected"}})
+            if self.path == "/v1/models/test-fixture-model":
+                return self.write_json(200, {"object": "model", "id": "test-fixture-model"})
+            return self.write_json(404, {"error": {"message": "fixture model missing"}})
+        self.write_json(404, {})
+
     def do_POST(self):
         auth = base64.b64encode(f"{LOGIN}:{PASSWORD}".encode()).decode()
         if self.headers.get("Authorization") != f"Basic {auth}":
@@ -125,6 +145,7 @@ class LocalProvider:
     def __enter__(self):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.calls = Counter()
+        self.server.checks = Counter()
         self.server.call_lock = Lock()
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = Thread(target=self.server.serve_forever, daemon=True)

@@ -96,26 +96,43 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.getByRole("link", { name: "Provider", exact: true }).click();
-  await page.getByRole("button", { name: "添加 Provider" }).click();
-  let provider = page.getByRole("dialog", { name: "添加 Provider" });
+  await page.getByRole("button", { name: "添加大模型" }).click();
+  let provider = page.getByRole("dialog", { name: "添加大模型" });
   await provider.getByLabel("名称", { exact: true }).fill("后台测试配置");
-  await provider.getByLabel("OpenAI 模型").fill("test-fixture-model");
+  await provider.getByLabel("OpenAI 模型 ID").fill("test-fixture-model");
+  await expect(provider.getByLabel("DataForSEO 登录名")).toHaveCount(0);
   await provider.getByLabel("API 密钥").fill("dashboard-no-network-test-key");
   await provider.getByRole("switch", { name: "启用" }).click();
   const providerCreated = page.waitForResponse(
     (reply) => new URL(reply.url()).pathname === "/seo/api/providers" && reply.request().method() === "POST",
   );
-  await provider.getByRole("button", { name: "保存 Provider" }).click();
+  await provider.getByRole("button", { name: "保存配置" }).click();
   const { provider: addedProvider } = await (await providerCreated).json();
   expect(addedProvider?.id).toBeTruthy();
   const savedProvider = page.getByRole("row").filter({ hasText: "后台测试配置" });
   await expect(savedProvider).toContainText("停用");
+  const probe = savedProvider.getByRole("button", { name: "测试连接", exact: true });
+  await expect(probe).toBeVisible();
+  if (process.env.SEOOS_E2E_PROVIDER_TEST === "1") {
+    const tested = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === `/seo/api/providers/${addedProvider.id}/test`,
+    );
+    await probe.click();
+    expect(await (await tested).json()).toMatchObject({ status: "ok", provider_version: 1 });
+    await expect(savedProvider.getByRole("status")).toHaveText(/连接成功（\d+ ms）/);
+  }
   await savedProvider.getByRole("button", { name: "编辑 后台测试配置" }).click();
-  provider = page.getByRole("dialog", { name: "编辑 Provider" });
+  provider = page.getByRole("dialog", { name: "编辑大模型" });
   await expect(provider.getByLabel("API 密钥")).toHaveValue("");
+  await provider.getByLabel("OpenAI 模型 ID").fill("missing-fixture-model");
   await provider.getByLabel("超时（秒）").fill("25");
-  await provider.getByRole("button", { name: "保存 Provider" }).click();
+  await provider.getByRole("button", { name: "保存配置" }).click();
   await expect(savedProvider).toContainText("25 秒");
+  await expect(savedProvider.getByRole("status")).toHaveText("");
+  if (process.env.SEOOS_E2E_PROVIDER_TEST === "1") {
+    await probe.click();
+    await expect(savedProvider.getByRole("status")).toContainText("在厂商处查不到该模型");
+  }
 
   await page.getByRole("link", { name: "成员", exact: true }).click();
   await page.getByRole("button", { name: "添加成员" }).click();
@@ -148,6 +165,13 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
       data: {},
     });
     expect(denied.status()).toBe(403);
+    const probeDenied = await request.post(`${api}/api/v1/providers/${addedProvider.id}/test`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+    });
+    expect(probeDenied.status()).toBe(403);
+    await viewer.goto("/seo/providers");
+    await expect(viewer.getByRole("row").filter({ hasText: "后台测试配置" })).toBeVisible();
+    await expect(viewer.getByRole("button", { name: "测试连接", exact: true })).toHaveCount(0);
     await viewer.getByRole("button", { name: "账号菜单" }).click();
     await viewer.getByRole("menuitem", { name: "退出登录" }).click();
     await expect(viewer.getByRole("heading", { name: "登录运营后台" })).toBeVisible();
@@ -156,6 +180,65 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   }
   expect(legacyRequests).toEqual([]);
   expect(browserErrors).toEqual([]);
+});
+
+test("WordPress connection uses the registered address and explains URL validation", async ({ page, request }) => {
+  const { token, api } = testCredentials();
+  async function register(name: string, baseURL: string) {
+    const response = await request.post(`${api}/api/v1/sites`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { name, base_url: baseURL, cms: "wordpress", country_code: "US", language_tag: "en-US" },
+    });
+    expect(response.status()).toBe(201);
+    return (await response.json()).site.id as string;
+  }
+  const insecure = await register("WordPress HTTP fixture", "http://wordpress-form.example.test/blog");
+  const secureURL = "https://wordpress-form.example.test/blog";
+  const secure = await register("WordPress HTTPS fixture", secureURL);
+  await signIn(page, token);
+  await page.getByRole("link", { name: "站点执行", exact: true }).click();
+  const sites = page.getByLabel("执行站点", { exact: true });
+  await expect(sites).toBeVisible();
+  async function fillConnection(site: string) {
+    await sites.selectOption(site);
+    await page.getByRole("button", { name: "新建连接" }).click();
+    const dialog = page.getByRole("dialog", { name: "新建连接" });
+    await dialog.getByLabel("连接名称").fill("WordPress 接入测试");
+    await dialog.getByLabel("WordPress 用户名").fill("local-editor");
+    await dialog.getByLabel("WordPress 应用程序密码", { exact: true }).fill("abcd efgh ijkl mnop qrst uvwx");
+    await dialog.getByRole("switch", { name: "启用连接" }).click();
+    await expect(dialog.getByRole("switch", { name: "授权此连接写入站点" })).not.toBeChecked();
+    return dialog;
+  }
+  let dialog = await fillConnection(insecure);
+  const invalid = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === "/seo/api/execution/connections" && res.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "保存连接" }).click();
+  expect(await (await invalid).json()).toMatchObject({ error: { code: "invalid_request", field: "base_url" } });
+  await expect(dialog.getByRole("alert")).toContainText("使用 HTTPS 首页地址");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+
+  dialog = await fillConnection(secure);
+  const address = dialog.getByLabel("WordPress 站点地址", { exact: true });
+  await expect(address).toHaveValue(secureURL);
+  await expect(address).not.toBeEditable();
+  const saved = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === "/seo/api/execution/connections" && res.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "保存连接" }).click();
+  const response = await saved;
+  expect(response.status()).toBe(201);
+  const body = await response.json();
+  expect(body.connection).toMatchObject({
+    kind: "wordpress",
+    base_url: secureURL,
+    configured: true,
+    allow_writes: false,
+  });
+  expect(body.connection.credential).toBeUndefined();
+  const row = page.getByRole("row").filter({ hasText: "WordPress 接入测试" });
+  await expect(row.getByRole("button", { name: "测试连接" })).toBeVisible();
 });
 
 test("ARTEX theme presets, font persistence, search, and mobile sidebar work in SEO", async ({ page }) => {
@@ -194,6 +277,9 @@ test("ARTEX theme presets, font persistence, search, and mobile sidebar work in 
   await expect(page.getByRole("heading", { name: "Provider", exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("tab", { name: "DataForSEO 数据源" }).click();
+  await expect(page.getByRole("table", { name: "DataForSEO 数据源" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole("button", { name: "Toggle Sidebar" }).click();
   await page.getByRole("link", { name: "站点", exact: true }).click();
   await expect(page.getByRole("heading", { name: "站点", exact: true })).toBeVisible();

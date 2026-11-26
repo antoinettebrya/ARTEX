@@ -23,6 +23,7 @@ var (
 	ErrProviderDisabled      = errors.New("provider is disabled")
 	ErrProviderNameTaken     = errors.New("provider name already exists")
 	ErrProviderNotConfigured = errors.New("provider credential encryption is unavailable")
+	ErrProviderTestLimited   = errors.New("provider connection test limit reached")
 )
 
 type JobInput struct {
@@ -185,8 +186,28 @@ type Provider struct {
 }
 
 type ProviderRepository interface {
-	ListProviders(context.Context, string, int, int) ([]Provider, error)
+	ListProviders(context.Context, string, string, int, int) ([]Provider, error)
 	SaveProvider(context.Context, string, string, ProviderInput) (Provider, error)
+	ReserveProviderTest(context.Context, string, string) (ProviderTestAccess, error)
+	RecordProviderTest(context.Context, string, string, ProviderTestResult) error
+}
+
+const (
+	ProviderCategoryModel = "model"
+	ProviderCategoryData  = "data"
+)
+
+type ProviderTestAccess struct {
+	Provider Provider
+	APIKey   string `json:"-"`
+	Login    string `json:"-"`
+	Password string `json:"-"`
+}
+
+type ProviderTestResult struct {
+	Status          string `json:"status"`
+	DurationMS      int64  `json:"duration_ms"`
+	ProviderVersion int64  `json:"provider_version"`
 }
 
 type ProviderCall struct {
