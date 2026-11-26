@@ -24,11 +24,23 @@ export type Job = {
   error_code?: string;
   result?: unknown;
 };
-export type ProviderKind = "openai" | "anthropic" | "gemini" | "deepseek" | "dataforseo";
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "deepseek" | "openai_compatible" | "dataforseo";
+export type ModelOptions = {
+  base_url?: string;
+  protocol?: string;
+  auth_header?: string;
+  auth_mode?: string;
+  token_field?: string;
+  temperature?: string;
+  reasoning_effort?: string;
+  output_format?: string;
+  workspace_id?: string;
+};
 export type Provider = {
   id: string;
   kind?: ProviderKind;
   daily_cost_micros?: number;
+  model_options?: ModelOptions;
   name: string;
   model: string;
   timeout_seconds: number;
@@ -67,6 +79,12 @@ const messages: Record<string, string> = {
   provider_disabled: "所选 Provider 已停用。",
   provider_name_taken: "当前组织已有相同名称的 Provider。",
   provider_test_limited: "已达到该连接的测试次数上限。请稍后再试。",
+  provider_model_base_url: "请填写公开 HTTPS API 基础地址，例如 https://api.example.com/v1。",
+  provider_model_auth_header: "请填写 Authorization、Api-Key 或厂商专用的 X-* 认证头。",
+  provider_model_api_key: "请填写 API 密钥。修改地址或认证头后需要重新输入密钥。",
+  provider_model_output_format: "请选择厂商和模型支持的输出格式。",
+  provider_model_reasoning_effort: "请选择当前厂商和模型支持的推理强度。",
+  provider_model_workspace_id: "请输入有效的 Claude Workspace ID。",
   credential_store_unavailable: "服务尚未配置 Provider 凭据加密。",
   job_settled: "任务已结束。",
   idempotency_conflict: "此表单已提交，请重新打开后再创建任务。",

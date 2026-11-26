@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
@@ -33,6 +34,7 @@ func (s *report) bing(key, from, to string) error {
 	if err := s.bingRequest(key, "GetUserSites", nil, &sites); err != nil {
 		return err
 	}
+	found := false
 	for _, site := range sites {
 		if !targetWithin(base, site.URL) {
 			continue
@@ -47,9 +49,16 @@ func (s *report) bing(key, from, to string) error {
 		s.output.Properties = append(s.output.Properties, domain.ExecutionProperty{
 			ID: site.URL, Name: site.URL, Permission: permission,
 		})
+		if targetWithin(base, site.URL) && strings.TrimRight(site.URL, "/") == strings.TrimRight(property, "/") &&
+			(site.Verified == nil || *site.Verified) {
+			found = true
+		}
 	}
 	if property == "" {
 		return nil
+	}
+	if !found {
+		return failure("execution_bing_property_unavailable")
 	}
 
 	var feeds []struct {
@@ -131,7 +140,7 @@ func (s *report) bingMetrics(base *url.URL, key, property, method, from, to stri
 			}
 			metric.Page = row.Query
 		}
-		s.output.Metrics = append(s.output.Metrics, metric)
+		s.addMetric(metric)
 	}
 	return nil
 }

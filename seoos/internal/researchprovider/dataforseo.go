@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
+	"github.com/Autumn-27/artex/seoos/internal/providerhttp"
 )
 
 const (
@@ -273,7 +275,34 @@ type apiTask struct {
 	Result     []json.RawMessage `json:"result"`
 }
 
-func (p *DataForSEO) Fetch(ctx context.Context, req domain.DataRequest, access domain.DataAccess) (domain.DataResponse, error) {
+func (p *DataForSEO) Fetch(ctx context.Context, req domain.DataRequest, access domain.DataAccess) (response domain.DataResponse, problem error) {
+	start := time.Now()
+	diagnostic := domain.ProviderReceipt{Provider: domain.ProviderDataForSEO, Operation: string(req.Operation), CostSource: "unknown"}
+	defer func() {
+		diagnostic.DurationMS = time.Since(start).Milliseconds()
+		diagnostic.Category = providerhttp.HTTPCategory(diagnostic.HTTPStatus)
+		diagnostic.MayBeCharged = true
+		if response.CostMicros != nil {
+			diagnostic.CostSource, diagnostic.CostMicros = "provider", response.CostMicros
+			diagnostic.MayBeCharged = *response.CostMicros > 0
+		}
+		var typed *domain.DataError
+		if errors.As(problem, &typed) {
+			diagnostic.Code, diagnostic.Retryable = typed.Code, typed.Retry
+			if typed.KnownUnbilled {
+				diagnostic.MayBeCharged = false
+			}
+			switch {
+			case strings.Contains(typed.Code, "timeout"):
+				diagnostic.Category = "timeout"
+			case strings.Contains(typed.Code, "transport"):
+				diagnostic.Category = "transport"
+			case diagnostic.HTTPStatus >= 200 && diagnostic.HTTPStatus < 300:
+				diagnostic.Category = dataStatusCategory(diagnostic.UpstreamCode)
+			}
+		}
+		response.Diagnostic = diagnostic
+	}()
 	call, err := prepareCall(req)
 	if err != nil {
 		return domain.DataResponse{}, err
@@ -308,7 +337,7 @@ func (p *DataForSEO) Fetch(ctx context.Context, req domain.DataRequest, access d
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 
-	response := domain.DataResponse{Source: domain.ProviderDataForSEO + call.path}
+	response = domain.DataResponse{Source: domain.ProviderDataForSEO + call.path}
 	httpResp, err := p.client.Do(httpReq)
 	if err != nil {
 		code := "provider_transport"
@@ -318,6 +347,7 @@ func (p *DataForSEO) Fetch(ctx context.Context, req domain.DataRequest, access d
 		return response, &domain.DataError{Code: code, Retry: true}
 	}
 	defer httpResp.Body.Close()
+	providerhttp.Response(&diagnostic, httpResp, access.Login, access.Password, httpReq.Header.Get("Authorization"))
 	response.CollectedAt = time.Now().UTC()
 	retryAfter := retryDelay(httpResp.Header.Get("Retry-After"), response.CollectedAt)
 	raw, readErr := io.ReadAll(io.LimitReader(httpResp.Body, domain.MaxProviderRawBytes+1))
@@ -333,12 +363,21 @@ func (p *DataForSEO) Fetch(ctx context.Context, req domain.DataRequest, access d
 
 	var body envelope
 	decodeErr := json.Unmarshal(raw, &body)
+	if body.StatusCode != 0 {
+		diagnostic.UpstreamCode = strconv.Itoa(body.StatusCode)
+	}
 	response.CostMicros = costMicros(body.Cost, body.Tasks)
 	if decodeErr != nil && response.CostMicros != nil && *response.CostMicros == 0 {
 		response.CostMicros = nil
 	}
 	if len(body.Tasks) == 1 {
-		response.TaskID = body.Tasks[0].ID
+		response.TaskID = providerhttp.Identifier(body.Tasks[0].ID, access.Login, access.Password)
+		if diagnostic.RequestID == "" {
+			diagnostic.RequestID = response.TaskID
+		}
+		if body.StatusCode == 20000 && body.Tasks[0].StatusCode != 0 {
+			diagnostic.UpstreamCode = strconv.Itoa(body.Tasks[0].StatusCode)
+		}
 	}
 	if credentialsReflected(raw, access) {
 		response.TaskID = ""
@@ -461,6 +500,10 @@ func retryDelay(value string, now time.Time) time.Duration {
 }
 
 func httpFailure(status int, retryAfter time.Duration, cost *int64) *domain.DataError {
+	if cost == nil && status >= 400 && status <= 405 {
+		zero := int64(0)
+		cost = &zero
+	}
 	switch {
 	case status >= 200 && status < 300:
 		return nil
@@ -473,6 +516,25 @@ func httpFailure(status int, retryAfter time.Duration, cost *int64) *domain.Data
 	default:
 		return billedError("provider_http_"+strconv.Itoa(status), cost)
 	}
+}
+
+func dataStatusCategory(code string) string {
+	switch code {
+	case "40100":
+		return "authentication"
+	case "40104", "40201", "40207":
+		return "permission"
+	case "40202", "40209":
+		return "rate_limit"
+	case "40200", "40203", "40210":
+		return "billing"
+	case "50401", "50402":
+		return "timeout"
+	}
+	if strings.HasPrefix(code, "5") {
+		return "upstream"
+	}
+	return "response"
 }
 
 func upstreamFailure(status int, retryAfter time.Duration, cost *int64) *domain.DataError {

@@ -8,13 +8,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Autumn-27/artex/seoos/internal/contentmodel"
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 )
 
 type repository interface {
 	ClaimJob(context.Context) (*domain.Lease, error)
 	GetSite(context.Context, string, string) (domain.Site, error)
-	ReserveProviderCall(context.Context, domain.Lease) (domain.ProviderCall, error)
+	ReserveProviderCall(context.Context, domain.Lease, ...domain.ContentModelRequest) (domain.ProviderCall, error)
+	SettleProviderCall(context.Context, domain.Lease, domain.ProviderCall, domain.JobOutcome) error
 	FinishJob(context.Context, domain.Lease, domain.JobOutcome) error
 }
 
@@ -25,7 +27,7 @@ type briefing interface {
 // Run polls PostgreSQL as the master dispatcher. Lease recovery also works
 // when multiple service processes are running against the same database.
 func Run(ctx context.Context, repo repository, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices) {
-	run(ctx, repo, openAI{endpoint: "https://api.openai.com/v1/responses"}, provider, content, execution)
+	run(ctx, repo, openAI{models: contentmodel.New(nil)}, provider, content, execution)
 }
 
 func run(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices) {
@@ -58,6 +60,9 @@ func runOnce(ctx context.Context, repo repository, briefs briefing, provider dom
 	timeout := 40 * time.Second
 	if domain.IsResearchKind(lease.Job.Kind) || domain.IsContentKind(lease.Job.Kind) || domain.IsExecutionKind(lease.Job.Kind) {
 		timeout = 70 * time.Second
+	}
+	if lease.Job.Kind == domain.ContentDraft {
+		timeout = 130 * time.Second
 	}
 	workCtx, cancel := context.WithTimeout(ctx, timeout)
 	outcome := dispatch(workCtx, repo, *lease, briefs, provider, content, execution)
@@ -98,22 +103,40 @@ func dispatch(ctx context.Context, repo repository, lease domain.Lease, briefs b
 	case domain.JobSiteInventory:
 		return encodedResult(site)
 	case domain.JobSiteBrief:
-		call, err := repo.ReserveProviderCall(ctx, lease)
+		request, err := siteBriefRequest(site)
+		if err != nil {
+			return domain.JobOutcome{Code: "profile_encoding_failed"}
+		}
+		call, err := repo.ReserveProviderCall(ctx, lease, request)
+		var problem *domain.DataError
 		switch {
 		case errors.Is(err, domain.ErrProviderDisabled), errors.Is(err, domain.ErrNotFound):
 			return domain.JobOutcome{Code: "provider_disabled"}
 		case errors.Is(err, domain.ErrProviderNotConfigured):
 			return domain.JobOutcome{Code: "provider_credentials_unavailable"}
+		case errors.As(err, &problem):
+			return domain.JobOutcome{Code: problem.Code}
 		case err != nil:
 			return domain.JobOutcome{Code: "provider_reservation_unavailable", Retry: true}
 		case !call.DeferUntil.IsZero():
 			return domain.JobOutcome{Code: "provider_budget_wait", DeferUntil: call.DeferUntil}
+		case call.Cached != nil:
+			return *call.Cached
 		default:
-			return briefs.generate(ctx, site, call)
+			return settleProvider(ctx, repo, lease, call, briefs.generate(ctx, site, call))
 		}
 	default:
 		return domain.JobOutcome{Code: "unknown_job_kind"}
 	}
+}
+
+func settleProvider(ctx context.Context, repo repository, lease domain.Lease, call domain.ProviderCall, result domain.JobOutcome) domain.JobOutcome {
+	settlement, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := repo.SettleProviderCall(settlement, lease, call, result); err != nil {
+		return domain.JobOutcome{Code: "provider_receipt_unavailable"}
+	}
+	return result
 }
 
 func encodedResult(value any) domain.JobOutcome {

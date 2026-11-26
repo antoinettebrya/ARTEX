@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
+	"github.com/Autumn-27/artex/seoos/internal/providerhttp"
 )
 
 const (
@@ -66,6 +67,24 @@ type report struct {
 	token  string
 	limit  int
 	output domain.ExecutionSync
+	rows   map[metricDimensions]struct{}
+}
+
+type metricDimensions struct {
+	day, page, query, country, device, language string
+}
+
+func (s *report) addMetric(row domain.ExecutionMetric) {
+	key := metricDimensions{row.Date, row.Page, row.Query, row.Country, row.Device, row.Language}
+	if _, exists := s.rows[key]; exists {
+		s.output.Truncated = true
+		return
+	}
+	if s.rows == nil {
+		s.rows = make(map[metricDimensions]struct{})
+	}
+	s.rows[key] = struct{}{}
+	s.output.Metrics = append(s.output.Metrics, row)
 }
 
 // Sync reserves at most maxRequests API calls for one reporting operation.
@@ -126,6 +145,15 @@ func (s *report) request(method, endpoint string, body any, out any) error {
 	}
 	s.output.Requests++
 	_, err := s.client.requestJSON(s.ctx, s.config, method, endpoint, s.token, body, out)
+	var problem *domain.DataError
+	if errors.As(err, &problem) && problem.Code == "execution_budget" {
+		s.output.Requests--
+		// Earlier calls, including OAuth, may already occupy the rolling window.
+		// Save partial data and release the job instead of replaying earlier pages.
+		if s.output.Requests > 0 {
+			return errRequestLimit
+		}
+	}
 	return err
 }
 
@@ -141,7 +169,7 @@ func (c *Client) requestJSON(ctx context.Context, config domain.ExecutionConnect
 	return c.request(ctx, config, method, endpoint, bearer, "application/json", payload, output)
 }
 
-func (c *Client) request(ctx context.Context, config domain.ExecutionConnection, method, endpoint, bearer, mediaType string, payload []byte, output any) (int, error) {
+func (c *Client) request(ctx context.Context, config domain.ExecutionConnection, method, endpoint, bearer, mediaType string, payload []byte, output any) (status int, problem error) {
 	target, err := url.Parse(endpoint)
 	if err != nil || target.Scheme != "https" || target.User != nil || target.Fragment != "" || !officialHost(target.Host) {
 		return 0, failure("execution_invalid_upstream_endpoint")
@@ -153,6 +181,7 @@ func (c *Client) request(ctx context.Context, config domain.ExecutionConnection,
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(min(timeout, 30))*time.Second)
 	defer cancel()
+	reqCtx, observation := providerhttp.Observe(reqCtx)
 	var body io.Reader
 	if payload != nil {
 		body = bytes.NewReader(payload)
@@ -184,8 +213,11 @@ func (c *Client) request(ctx context.Context, config domain.ExecutionConnection,
 		// net/url.Error can print the Bing query string containing its API key.
 		return 0, &domain.DataError{Code: "execution_upstream_transport", Retry: true}
 	}
-	defer resp.Body.Close()
-	status := resp.StatusCode
+	defer func() {
+		observation.Set(problem)
+		_ = resp.Body.Close()
+	}()
+	status = resp.StatusCode
 	if status < 200 || status >= 300 {
 		return status, responseError(resp, target.Host)
 	}

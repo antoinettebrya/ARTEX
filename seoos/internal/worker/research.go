@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -231,7 +232,12 @@ func fetchAndSettle(ctx context.Context, repo researchRuntime, provider domain.S
 		return result, domain.JobOutcome{Code: "provider_receipt_unknown"}
 	}
 	if failure != nil {
-		return result, researchFailure(failure)
+		outcome := researchFailure(failure)
+		if result.CostMicros != nil && *result.CostMicros > 0 {
+			outcome.Retry = false
+			outcome.RetryAfter = time.Time{}
+		}
+		return result, outcome
 	}
 	return result, domain.JobOutcome{}
 }
@@ -328,14 +334,29 @@ func intentSignal(ctx context.Context, repo researchRuntime, briefs briefing, le
 	if !ok {
 		return nil, domain.JobOutcome{Code: "intent_provider_unavailable"}
 	}
-	call, err := repo.ReserveProviderCall(ctx, lease)
+	request, err := intentModelRequest(e, market)
+	if err != nil {
+		return nil, domain.JobOutcome{Code: "intent_input_invalid"}
+	}
+	call, err := repo.ReserveProviderCall(ctx, lease, request)
 	if err != nil {
 		return nil, researchFailure(err)
 	}
 	if !call.DeferUntil.IsZero() {
 		return nil, domain.JobOutcome{Code: "provider_budget_wait", DeferUntil: call.DeferUntil}
 	}
-	return assistant.intent(ctx, e, market, call)
+	if call.Cached != nil {
+		if call.Cached.Code != "" {
+			return nil, *call.Cached
+		}
+		var saved domain.SearchIntent
+		if err := json.Unmarshal(call.Cached.Result, &saved); err != nil {
+			return nil, domain.JobOutcome{Code: "intent_provider_response_invalid"}
+		}
+		return &saved, *call.Cached
+	}
+	signal, outcome := assistant.intent(ctx, e, market, call)
+	return signal, settleProvider(ctx, repo, lease, call, outcome)
 }
 
 func researchFailure(err error) domain.JobOutcome {

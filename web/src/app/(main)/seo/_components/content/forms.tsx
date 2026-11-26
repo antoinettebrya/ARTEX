@@ -414,6 +414,10 @@ export function ModelProfileEditor({ provider, onClose }: Close & { provider: Pr
           daily_tokens: value("daily_tokens"),
           daily_cost_micros: value("daily_cost_micros"),
           input_micros_per_million: value("input_micros_per_million"),
+          cached_input_micros_per_million:
+            field(data, "cached_input_micros_per_million") === ""
+              ? undefined
+              : value("cached_input_micros_per_million"),
           output_micros_per_million: value("output_micros_per_million"),
           max_retries: value("max_retries"),
           retry_seconds: value("retry_seconds"),
@@ -448,6 +452,21 @@ export function ModelProfileEditor({ provider, onClose }: Close & { provider: Pr
           </Field>
         );
       })}
+      <Field id="content-model-cached-input" label="每百万缓存输入 Token 单价（USD，选填）">
+        <Input
+          id="content-model-cached-input"
+          name="cached_input_micros_per_million"
+          type="number"
+          min={0}
+          max={10_000}
+          step={0.000001}
+          defaultValue={
+            profile?.cached_input_micros_per_million === undefined
+              ? undefined
+              : profile.cached_input_micros_per_million / 1_000_000
+          }
+        />
+      </Field>
       <div className="sm:col-span-2">
         <Field id="content-model-system" label="System Prompt">
           <Textarea

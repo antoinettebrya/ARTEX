@@ -73,7 +73,7 @@ func TestProviderChecksUseReadOnlyVendorAPIs(t *testing.T) {
 				Provider: domain.Provider{Kind: tt.kind, ProviderSettings: domain.ProviderSettings{Model: model, TimeoutSeconds: 2}},
 				APIKey:   testKey, Login: login, Password: password,
 			}
-			if got := client.Test(context.Background(), access); got != "ok" {
+			if got, receipt := client.Test(context.Background(), access); got != "ok" || receipt.HTTPStatus != 200 {
 				t.Fatalf("connection check = %s", got)
 			}
 		})
@@ -110,7 +110,7 @@ func TestConnectionFailuresAreSanitizedAndRedirectsStayUnfollowed(t *testing.T) 
 			})})
 			access := domain.ProviderTestAccess{Provider: domain.Provider{Kind: tt.kind,
 				ProviderSettings: domain.ProviderSettings{Model: model, TimeoutSeconds: 1}}}
-			if got := client.Test(context.Background(), access); got != tt.want || calls != 1 {
+			if got, _ := client.Test(context.Background(), access); got != tt.want || calls != 1 {
 				t.Fatalf("check = %q, calls = %d, want %q and one call", got, calls, tt.want)
 			}
 		})
@@ -124,7 +124,7 @@ func TestProviderCheckTimeout(t *testing.T) {
 	})})
 	access := domain.ProviderTestAccess{Provider: domain.Provider{Kind: domain.ProviderOpenAI,
 		ProviderSettings: domain.ProviderSettings{Model: model, TimeoutSeconds: 1}}}
-	if got := client.Test(context.Background(), access); got != "timeout" {
+	if got, _ := client.Test(context.Background(), access); got != "timeout" {
 		t.Fatalf("check = %s", got)
 	}
 }

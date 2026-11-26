@@ -49,14 +49,14 @@ func TestPostgresExecutionConnectionScopeQuotaAndOAuthState(t *testing.T) {
 	if bytes.Contains(stored, []byte("fixture-private-token")) {
 		t.Fatal("credential persisted in plaintext")
 	}
-	if err := s.UseExecutionRequest(owner, org, a.ID, c.ID, c.Version, nil); err != nil {
+	if _, err := s.ReserveExecutionRequest(owner, org, a.ID, c.ID, c.Version, nil); err != nil {
 		t.Fatal(err)
 	}
 	var quota *domain.DataError
-	if err := s.UseExecutionRequest(owner, org, a.ID, c.ID, c.Version, nil); !errors.As(err, &quota) || quota.Code != "execution_budget" || quota.RetryAfter <= 0 {
+	if _, err := s.ReserveExecutionRequest(owner, org, a.ID, c.ID, c.Version, nil); !errors.As(err, &quota) || quota.Code != "execution_budget" || quota.RetryAfter <= 0 {
 		t.Fatalf("second request exceeded a real rolling budget: %v", err)
 	}
-	if err := s.UseExecutionRequest(owner, org, a.ID, c.ID, c.Version+1, nil); !errors.Is(err, domain.ErrExecutionAuthority) {
+	if _, err := s.ReserveExecutionRequest(owner, org, a.ID, c.ID, c.Version+1, nil); !errors.Is(err, domain.ErrExecutionAuthority) {
 		t.Fatalf("version fence: %v", err)
 	}
 	check, _, err := s.EnqueueExecution(owner, org, domain.ExecutionJobInput{SiteID: a.ID, ConnectionID: c.ID,

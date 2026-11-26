@@ -274,7 +274,7 @@ func (s *Store) ExecutionSyncDates(ctx context.Context, c domain.ExecutionConnec
 	return from.Format(time.DateOnly), to.Format(time.DateOnly), err
 }
 
-func (s *Store) ExecutionSubmissionFailure(ctx context.Context, lease domain.Lease, provider, url string, status int, code string) error {
+func (s *Store) BeginExecutionSubmission(ctx context.Context, lease domain.Lease, provider, url string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -284,9 +284,55 @@ func (s *Store) ExecutionSubmissionFailure(ctx context.Context, lease domain.Lea
 	if err != nil {
 		return err
 	}
+	if job.Kind != domain.ExecIndexNow || provider != domain.ExecutionIndexNow && provider != domain.ExecutionBing {
+		return domain.ErrExecutionUnsupported
+	}
+	lock := "indexing:" + job.OrganizationID + ":" + job.SiteID + ":" + provider + ":" + url
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lock); err != nil {
+		return err
+	}
+	var prior string
+	err = tx.QueryRowContext(ctx, `SELECT data->>'status' FROM public.seo_indexing_submissions
+		WHERE organization_id=$1 AND site_id=$2 AND provider=$3 AND data->>'url'=$4 AND
+			((job_id=$5 AND data->>'status' IN ('dispatching','unknown')) OR
+			(created_at >= clock_timestamp()-interval '24 hours' AND data->>'status' IN
+				('dispatching','unknown','accepted','pending_key_validation')))
+		ORDER BY created_at DESC LIMIT 1`, job.OrganizationID, job.SiteID, provider, url, job.ID).Scan(&prior)
+	if err == nil {
+		code := "execution_indexing_recently_submitted"
+		if prior == "dispatching" || prior == "unknown" {
+			code = "execution_indexing_receipt_unknown"
+		}
+		return &domain.DataError{Code: code}
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_indexing_submissions (organization_id,site_id,job_id,provider,data)
 		VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id) DO UPDATE SET data=EXCLUDED.data`,
-		map[string]any{"url": url, "status": "failed", "http_status": status, "error": code}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
+		map[string]any{"url": url, "status": "dispatching"}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ExecutionSubmissionFailure(ctx context.Context, lease domain.Lease, provider, url string, status int, code string, unknown bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	job, err := lockLease(ctx, tx, lease)
+	if err != nil {
+		return err
+	}
+	state := "failed"
+	if unknown {
+		state = "unknown"
+	}
+	if err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_indexing_submissions (organization_id,site_id,job_id,provider,data)
+		VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id) DO UPDATE SET data=EXCLUDED.data`,
+		map[string]any{"url": url, "status": state, "http_status": status, "error": code}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
 		return err
 	}
 	if err = audit(ctx, tx, job.OrganizationID, "execution.indexing.submit_fail", job.ID, map[string]string{"provider": provider, "error": code}); err != nil {

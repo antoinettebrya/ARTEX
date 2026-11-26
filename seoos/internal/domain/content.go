@@ -7,25 +7,26 @@ import (
 )
 
 const (
-	ProviderAnthropic = "anthropic"
-	ProviderGemini    = "gemini"
-	ProviderDeepSeek  = "deepseek"
-	ContentInventory  = "site_inventory"
-	ContentExtract    = "page_extraction"
-	ContentPlan       = "content_strategy"
-	ContentBriefJob   = "content_brief"
-	ContentResearch   = "content_research"
-	ContentOutline    = "content_outline"
-	ContentDraft      = "content_draft"
-	ContentFactCheck  = "content_fact_check"
-	ContentReview     = "content_quality_review"
-	ContentOptimize   = "content_seo_optimization"
-	ContentRefresh    = "content_refresh"
-	ContentVerify     = "content_publish_verify"
+	ProviderAnthropic  = "anthropic"
+	ProviderGemini     = "gemini"
+	ProviderDeepSeek   = "deepseek"
+	ProviderCompatible = "openai_compatible"
+	ContentInventory   = "site_inventory"
+	ContentExtract     = "page_extraction"
+	ContentPlan        = "content_strategy"
+	ContentBriefJob    = "content_brief"
+	ContentResearch    = "content_research"
+	ContentOutline     = "content_outline"
+	ContentDraft       = "content_draft"
+	ContentFactCheck   = "content_fact_check"
+	ContentReview      = "content_quality_review"
+	ContentOptimize    = "content_seo_optimization"
+	ContentRefresh     = "content_refresh"
+	ContentVerify      = "content_publish_verify"
 )
 
 func IsModelProvider(kind string) bool {
-	return kind == ProviderOpenAI || kind == ProviderAnthropic || kind == ProviderGemini || kind == ProviderDeepSeek
+	return kind == ProviderOpenAI || kind == ProviderAnthropic || kind == ProviderGemini || kind == ProviderDeepSeek || kind == ProviderCompatible
 }
 
 var (
@@ -355,17 +356,18 @@ type ContentAction struct {
 }
 
 type ContentModelProfile struct {
-	ProviderID             string  `json:"provider_id"`
-	Role                   string  `json:"role"`
-	SystemPrompt           string  `json:"system_prompt"`
-	Temperature            float64 `json:"temperature"`
-	MaxInputTokens         int     `json:"max_input_tokens"`
-	DailyTokens            int64   `json:"daily_tokens"`
-	DailyCostMicros        int64   `json:"daily_cost_micros"`
-	InputMicrosPerMillion  int64   `json:"input_micros_per_million"`
-	OutputMicrosPerMillion int64   `json:"output_micros_per_million"`
-	MaxRetries             int     `json:"max_retries"`
-	RetrySeconds           int     `json:"retry_seconds"`
+	ProviderID                  string  `json:"provider_id"`
+	Role                        string  `json:"role"`
+	SystemPrompt                string  `json:"system_prompt"`
+	Temperature                 float64 `json:"temperature"`
+	MaxInputTokens              int     `json:"max_input_tokens"`
+	DailyTokens                 int64   `json:"daily_tokens"`
+	DailyCostMicros             int64   `json:"daily_cost_micros"`
+	InputMicrosPerMillion       int64   `json:"input_micros_per_million"`
+	CachedInputMicrosPerMillion *int64  `json:"cached_input_micros_per_million,omitempty"`
+	OutputMicrosPerMillion      int64   `json:"output_micros_per_million"`
+	MaxRetries                  int     `json:"max_retries"`
+	RetrySeconds                int     `json:"retry_seconds"`
 }
 
 type ContentModelRequest struct {
@@ -376,11 +378,14 @@ type ContentModelRequest struct {
 }
 
 type ContentModelResponse struct {
-	Text         string `json:"text"`
-	Model        string `json:"model"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-	ReceiptID    string `json:"receipt_id,omitempty"`
+	Text          string          `json:"text"`
+	Model         string          `json:"model"`
+	InputTokens   int64           `json:"input_tokens"`
+	OutputTokens  int64           `json:"output_tokens"`
+	ReceiptID     string          `json:"receipt_id,omitempty"`
+	ResponseID    string          `json:"-"`
+	UsageReported bool            `json:"-"`
+	Diagnostic    ProviderReceipt `json:"-"`
 }
 
 type ContentStageResult struct {

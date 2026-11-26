@@ -260,7 +260,8 @@ func (s *Store) ClaimJob(ctx context.Context) (*domain.Lease, error) {
 		action = "job.recover"
 	}
 	job, err = scanJob(tx.QueryRowContext(ctx, `UPDATE public.seo_jobs
-		SET state = 'running', lease_token = $3, lease_until = clock_timestamp() + interval '90 seconds',
+		SET state = 'running', lease_token = $3, lease_until = clock_timestamp() +
+			CASE WHEN kind='content_draft' THEN interval '150 seconds' ELSE interval '90 seconds' END,
 			attempts = attempts + 1, updated_at = clock_timestamp()
 		WHERE organization_id = $1 AND id = $2 RETURNING `+jobColumns,
 		job.OrganizationID, job.ID, token))

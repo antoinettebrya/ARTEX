@@ -1,5 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { join } from "node:path";
+
 function testCredentials() {
   const token = process.env.SEOOS_E2E_TOKEN;
   const api = process.env.SEOOS_API_ORIGIN;
@@ -172,6 +174,11 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
     await viewer.goto("/seo/providers");
     await expect(viewer.getByRole("row").filter({ hasText: "后台测试配置" })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "测试连接", exact: true })).toHaveCount(0);
+    await expect(viewer.getByRole("tab", { name: "请求诊断" })).toHaveCount(0);
+    const receiptsDenied = await request.get(`${api}/api/v1/providers/receipts`, {
+      headers: { Authorization: `Bearer ${viewerToken}` },
+    });
+    expect(receiptsDenied.status()).toBe(403);
     await viewer.getByRole("button", { name: "账号菜单" }).click();
     await viewer.getByRole("menuitem", { name: "退出登录" }).click();
     await expect(viewer.getByRole("heading", { name: "登录运营后台" })).toBeVisible();
@@ -180,6 +187,55 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   }
   expect(legacyRequests).toEqual([]);
   expect(browserErrors).toEqual([]);
+});
+
+test("OpenAI Compatible capabilities persist and URL changes require a new credential", async ({ page }) => {
+  await signIn(page, testCredentials().token);
+  await page.getByRole("link", { name: "Provider", exact: true }).click();
+  await page.getByRole("button", { name: "添加大模型" }).click();
+  let dialog = page.getByRole("dialog", { name: "添加大模型" });
+  await dialog.getByLabel("模型厂商").selectOption("openai_compatible");
+  await dialog.getByLabel("名称", { exact: true }).fill("独立兼容模型");
+  await dialog.getByLabel("OpenAI 兼容 模型 ID").fill("fixture/custom-model");
+  const testKey = "compatible-fixture-credential";
+  await dialog.getByLabel("API 密钥").fill(testKey);
+  await dialog.getByLabel("API Base URL").fill("https://api.example.com/gateway/v1");
+  await dialog.getByLabel("认证 Header", { exact: true }).fill("X-Vendor-Key");
+  await dialog.getByLabel("认证方式").selectOption("raw");
+  await dialog.getByLabel("输出 Token 参数").selectOption("max_completion_tokens");
+  await dialog.getByLabel("推理强度").selectOption("high");
+  await dialog.getByLabel("输出格式").selectOption("json_schema");
+  const screenshots = process.env.SEOOS_E2E_PROVIDER_SCREENSHOTS;
+  if (screenshots) {
+    await dialog.screenshot({
+      path: join(screenshots, "ARTEX-OpenAI兼容配置-本地.png"),
+      mask: [dialog.getByLabel("API 密钥")],
+    });
+  }
+  const created = page.waitForResponse(
+    (res) => new URL(res.url()).pathname === "/seo/api/providers" && res.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "保存配置" }).click();
+  const reply = await created;
+  const body = await reply.json();
+  expect(reply.status()).toBe(201);
+  expect(body.provider.model_options).toMatchObject({
+    output_format: "json_schema",
+    auth_header: "X-Vendor-Key",
+    reasoning_effort: "high",
+  });
+  expect(JSON.stringify(body)).not.toContain(testKey);
+  await expect(page.getByRole("row").filter({ hasText: "独立兼容模型" })).toBeVisible();
+  await page.getByRole("button", { name: "编辑 独立兼容模型" }).click();
+  dialog = page.getByRole("dialog", { name: "编辑大模型" });
+  await expect(dialog.getByLabel("API 密钥")).toHaveValue("");
+  await expect(dialog.getByLabel("API Base URL")).toHaveValue("https://api.example.com/gateway/v1");
+  await dialog.getByLabel("API Base URL").fill("https://other.example.com/v1");
+  await dialog.getByRole("button", { name: "保存配置" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("需要重新输入密钥");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("tab", { name: "请求诊断" }).click();
+  await expect(page.getByRole("table", { name: "Provider 请求诊断" })).toBeVisible();
 });
 
 test("WordPress installation can be edited within its registered HTTPS site", async ({ page, request }) => {

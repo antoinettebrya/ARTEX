@@ -204,6 +204,16 @@ func TestPostgresResearchBudgetPriorityAndWorkerRecovery(t *testing.T) {
 	if got, err := s.ReserveData(ctx, recovered, scope, req, plan); !errors.As(err, &problem) || problem.Code != "provider_receipt_unknown" || got.ID != "" {
 		t.Fatalf("ambiguous charge was automatically replayed: %v", err)
 	}
+	duplicate := in
+	duplicate.IdempotencyKey = uuid.NewString()
+	copyJob := enqueueResearchTest(t, s, ctx, org, duplicate)
+	copyLease, copyScope := claimResearch(t, s, ctx, copyJob)
+	if got, err := s.ReserveData(ctx, copyLease, copyScope, req, plan); !errors.As(err, &problem) || problem.Code != "provider_receipt_unknown" || got.ID != "" {
+		t.Fatalf("new job ID bypassed the ambiguous-charge barrier: %v", err)
+	}
+	if err := s.FinishJob(ctx, copyLease, domain.JobOutcome{Code: "provider_receipt_unknown"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.FinishJob(ctx, lease, domain.JobOutcome{Result: json.RawMessage(`{}`)}); !errors.Is(err, domain.ErrLeaseLost) {
 		t.Fatalf("stale lease was able to finish the task: %v", err)
 	}

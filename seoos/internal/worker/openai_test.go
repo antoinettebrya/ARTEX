@@ -5,16 +5,38 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/Autumn-27/artex/seoos/internal/contentmodel"
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/Autumn-27/artex/seoos/internal/researchengine"
 )
 
+type routedModelFixture struct {
+	target    *url.URL
+	transport http.RoundTripper
+}
+
+func (f routedModelFixture) RoundTrip(r *http.Request) (*http.Response, error) {
+	next := r.Clone(r.Context())
+	next.URL = f.target
+	return f.transport.RoundTrip(next)
+}
+
+func fixtureModel(t *testing.T, server *httptest.Server, path string) openAI {
+	t.Helper()
+	target, err := url.Parse(server.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return openAI{models: contentmodel.New(&http.Client{Transport: routedModelFixture{target, server.Client().Transport}})}
+}
+
 func TestOpenAIResponsesContract(t *testing.T) {
 	call := domain.ProviderCall{
-		Provider: domain.Provider{ProviderSettings: domain.ProviderSettings{Model: "test-model", MaxOutputTokens: 256, TimeoutSeconds: 2}},
+		Provider: domain.Provider{Kind: domain.ProviderOpenAI, ProviderSettings: domain.ProviderSettings{Model: "test-model", MaxOutputTokens: 256, TimeoutSeconds: 2}},
 		APIKey:   "fixture-only-test-credential",
 	}
 	site := domain.Site{Name: "Editorial", CountryCode: "JP", LanguageTag: "ja", CMS: "wordpress", BaseURL: "https://reserved.example.test"}
@@ -37,7 +59,7 @@ func TestOpenAIResponsesContract(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"response_fixture","status":"completed","model":"test-model","output":[{"type":"message","content":[{"type":"output_text","text":"A test brief"}]}],"usage":{"input_tokens":10,"output_tokens":6}}`))
 	}))
 	defer server.Close()
-	outcome := (openAI{endpoint: server.URL + "/v1/responses"}).generate(context.Background(), site, call)
+	outcome := fixtureModel(t, server, "/v1/responses").generate(context.Background(), site, call)
 	var got briefResult
 	if err := json.Unmarshal(outcome.Result, &got); err != nil || outcome.Code != "" || got.Text != "A test brief" || got.OutputTokens != 6 {
 		t.Fatalf("wrong result: %s, %s, %v", outcome.Code, outcome.Result, err)
@@ -46,6 +68,7 @@ func TestOpenAIResponsesContract(t *testing.T) {
 
 func TestOpenAIIntentCorroboratesObservedEvidence(t *testing.T) {
 	call := domain.ProviderCall{APIKey: "fixture-only-intent-credential", Provider: domain.Provider{
+		Kind:             domain.ProviderOpenAI,
 		ProviderSettings: domain.ProviderSettings{Model: "fixture-model", MaxOutputTokens: 256, TimeoutSeconds: 2},
 	}}
 	evidence := domain.KeywordEvidence{Term: "best robot vacuum comparison", SERP: []domain.SERPEntry{
@@ -61,11 +84,11 @@ func TestOpenAIIntentCorroboratesObservedEvidence(t *testing.T) {
 			!strings.Contains(data.Input, "Best robot vacuums") || strings.Contains(data.Input, "_NOT_SENT") {
 			t.Error("intent provider received something other than bounded ranked evidence")
 		}
-		_, _ = w.Write([]byte(`{"id":"fixture_intent","status":"completed","model":"fixture-model","output":[{"type":"message","content":[{"type":"output_text","text":"{\"primary\":\"transactional\",\"confidence\":1}"}]}]}`))
+		_, _ = w.Write([]byte(`{"id":"fixture_intent","status":"completed","model":"fixture-model","output":[{"type":"message","content":[{"type":"output_text","text":"{\"primary\":\"transactional\",\"confidence\":1}"}]}],"usage":{"input_tokens":5,"output_tokens":3}}`))
 	}))
 	defer server.Close()
 	market := domain.Market{CountryCode: "US", LocationCode: 2840, LanguageCode: "en", SearchEngine: "google", Device: "desktop"}
-	signal, outcome := (openAI{endpoint: server.URL}).intent(context.Background(), evidence, market, call)
+	signal, outcome := fixtureModel(t, server, "/").intent(context.Background(), evidence, market, call)
 	if outcome.Code != "" || signal == nil || signal.Primary != "transactional" || len(signal.Sources) != 2 {
 		t.Fatalf("failed to parse auxiliary signal: %#v, %#v", signal, outcome)
 	}
@@ -80,11 +103,11 @@ func TestOpenAIFailuresAndRedirect(t *testing.T) {
 		code   string
 		retry  bool
 	}{
-		{http.StatusUnauthorized, "provider_authentication", false},
-		{http.StatusTooManyRequests, "provider_retryable", true},
-		{http.StatusServiceUnavailable, "provider_retryable", true},
-		{http.StatusTemporaryRedirect, "provider_rejected", false},
-		{http.StatusOK, "provider_response_invalid", false},
+		{http.StatusUnauthorized, "content_model_unauthorized", false},
+		{http.StatusTooManyRequests, "content_model_rate_limited", true},
+		{http.StatusServiceUnavailable, "content_model_upstream_unavailable", false},
+		{http.StatusTemporaryRedirect, "content_model_rejected", false},
+		{http.StatusOK, "content_model_invalid_response", false},
 	} {
 		t.Run(test.code+http.StatusText(test.status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,8 +119,9 @@ func TestOpenAIFailuresAndRedirect(t *testing.T) {
 				_, _ = w.Write([]byte("fixture failure"))
 			}))
 			defer server.Close()
-			outcome := (openAI{endpoint: server.URL}).generate(context.Background(), domain.Site{}, domain.ProviderCall{
-				Provider: domain.Provider{ProviderSettings: domain.ProviderSettings{TimeoutSeconds: 2}},
+			outcome := fixtureModel(t, server, "/").generate(context.Background(), domain.Site{}, domain.ProviderCall{
+				Provider: domain.Provider{Kind: domain.ProviderOpenAI, ProviderSettings: domain.ProviderSettings{TimeoutSeconds: 2}},
+				APIKey:   "fixture-only-error-credential",
 			})
 			if outcome.Code != test.code || outcome.Retry != test.retry {
 				t.Fatalf("wrong outcome %#v", outcome)
@@ -106,8 +130,8 @@ func TestOpenAIFailuresAndRedirect(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	outcome := (openAI{endpoint: "http://127.0.0.1:1"}).generate(ctx, domain.Site{}, domain.ProviderCall{})
-	if outcome.Code != "provider_transport" || !outcome.Retry {
+	outcome := (openAI{models: contentmodel.New(nil)}).generate(ctx, domain.Site{}, domain.ProviderCall{})
+	if outcome.Code != "content_model_cancelled" || outcome.Retry {
 		t.Fatalf("cancelled request: %#v", outcome)
 	}
 }

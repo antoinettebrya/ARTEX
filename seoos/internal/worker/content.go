@@ -290,7 +290,7 @@ func (s contentStage) generate(ctx context.Context, step string, request domain.
 	}
 	if problem != nil {
 		outcome := contentFailure(problem)
-		outcome.Retry = problem.Retry && s.lease.Job.Attempts <= res.Profile.MaxRetries
+		outcome.Retry = problem.Retry && problem.KnownUnbilled && s.lease.Job.Attempts <= res.Profile.MaxRetries
 		if outcome.Retry {
 			delay := max(problem.RetryAfter, time.Duration(res.Profile.RetrySeconds)*time.Second)
 			outcome.RetryAfter = time.Now().UTC().Add(delay)

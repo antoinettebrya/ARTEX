@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Autumn-27/artex/seoos/internal/contentmodel"
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/google/uuid"
 )
@@ -45,6 +46,7 @@ func (s *Store) SaveContentModel(ctx context.Context, org string, p domain.Conte
 	if err = audit(ctx, tx, org, "content.model.profile", p.ProviderID, map[string]any{
 		"role": p.Role, "daily_tokens": p.DailyTokens, "daily_cost_micros": p.DailyCostMicros,
 		"input_micros_per_million": p.InputMicrosPerMillion, "output_micros_per_million": p.OutputMicrosPerMillion,
+		"cached_input_micros_per_million": p.CachedInputMicrosPerMillion,
 	}); err != nil {
 		return p, err
 	}
@@ -53,6 +55,15 @@ func (s *Store) SaveContentModel(ctx context.Context, org string, p domain.Conte
 
 func modelCharge(p domain.ContentModelProfile, in, out int64) int64 {
 	return (in*p.InputMicrosPerMillion + out*p.OutputMicrosPerMillion + 999999) / 1000000
+}
+
+func measuredModelCharge(p domain.ContentModelProfile, in, out int64, cached *int64) int64 {
+	if cached == nil || p.CachedInputMicrosPerMillion == nil {
+		return modelCharge(p, in, out)
+	}
+	hit := max(0, min(in, *cached))
+	cachedRate := *p.CachedInputMicrosPerMillion
+	return ((in-hit)*p.InputMicrosPerMillion + hit*cachedRate + out*p.OutputMicrosPerMillion + 999999) / 1000000
 }
 
 func (s *Store) ReserveContentModel(ctx context.Context, lease domain.Lease, step string, req domain.ContentModelRequest,
@@ -155,7 +166,10 @@ func (s *Store) ReserveContentModel(ctx context.Context, lease domain.Lease, ste
 		}
 		return res, &domain.DataError{Code: "content_model_receipt_unknown"}
 	}
-	estimatedInput := int64(len(req.Input) + len(req.System) + len(settings.SystemPrompt) + len(req.Language) + 512)
+	estimatedInput, err := contentmodel.EstimateInputTokens(req, p, settings)
+	if err != nil {
+		return res, &domain.DataError{Code: "content_model_invalid_request", KnownUnbilled: true}
+	}
 	if estimatedInput > int64(settings.MaxInputTokens) {
 		return res, &domain.DataError{Code: "content_model_input_budget"}
 	}
@@ -171,9 +185,7 @@ func (s *Store) ReserveContentModel(ctx context.Context, lease domain.Lease, ste
 	day := now.UTC().Truncate(24 * time.Hour)
 	minute := now.Add(-time.Minute)
 	var usedTokens, usedCost int64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(COALESCE(tokens,reserved_tokens)),0)::bigint,
-		COALESCE(sum(COALESCE(cost_micros,reserved_micros)),0)::bigint FROM public.seo_content_model_calls
-		WHERE organization_id=$1 AND provider_id=$2 AND reserved_at >= $3`, job.OrganizationID, p.ID, day).Scan(&usedTokens, &usedCost); err != nil {
+	if err = tx.QueryRowContext(ctx, modelDailySpend, job.OrganizationID, p.ID, day).Scan(&usedTokens, &usedCost); err != nil {
 		return res, err
 	}
 	var daily, recent int
@@ -220,6 +232,17 @@ const modelRequests = `SELECT count(*) FILTER (WHERE reserved_at >= $3),
 			AND reserved_at >= least($3::timestamptz,$4::timestamptz)
 	) requests`
 
+const modelDailySpend = `SELECT COALESCE(sum(tokens),0)::bigint,COALESCE(sum(micros),0)::bigint FROM (
+	SELECT COALESCE(tokens,reserved_tokens) tokens,COALESCE(cost_micros,reserved_micros) micros
+	FROM public.seo_content_model_calls WHERE organization_id=$1 AND provider_id=$2 AND reserved_at >= $3
+	UNION ALL
+	SELECT CASE WHEN diagnostic->>'cost_source'='unbilled' THEN 0 ELSE
+		COALESCE((diagnostic->>'input_tokens')::bigint+(diagnostic->>'output_tokens')::bigint,
+			(diagnostic->>'reserved_tokens')::bigint,0) END,
+		COALESCE((diagnostic->>'cost_micros')::bigint,(diagnostic->>'reserved_micros')::bigint,0)
+	FROM public.seo_provider_calls WHERE organization_id=$1 AND provider_id=$2 AND reserved_at >= $3
+) spend`
+
 func (s *Store) SettleContentModel(ctx context.Context, lease domain.Lease, res domain.ContentModelReservation,
 	response domain.ContentModelResponse, problem *domain.DataError) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -229,16 +252,37 @@ func (s *Store) SettleContentModel(ctx context.Context, lease domain.Lease, res 
 	defer tx.Rollback()
 	state, code := "succeeded", ""
 	var total, price *int64
-	if response.InputTokens > 0 || response.OutputTokens > 0 || problem != nil && problem.KnownUnbilled {
+	diagnostic := response.Diagnostic
+	if diagnostic.Provider == "" {
+		diagnostic.Provider, diagnostic.Operation = res.Provider.Kind, res.Provider.Model
+	}
+	diagnostic.CostSource = "unknown"
+	if problem != nil && problem.KnownUnbilled {
+		zero := int64(0)
+		total, price = &zero, &zero
+		diagnostic.CostSource = "unbilled"
+	} else if response.UsageReported || response.InputTokens > 0 || response.OutputTokens > 0 {
 		t := response.InputTokens + response.OutputTokens
-		c := modelCharge(res.Profile, response.InputTokens, response.OutputTokens)
+		c := measuredModelCharge(res.Profile, response.InputTokens, response.OutputTokens, diagnostic.CachedTokens)
 		total, price = &t, &c
+		diagnostic.InputTokens, diagnostic.OutputTokens = &response.InputTokens, &response.OutputTokens
+		diagnostic.CostSource = "estimated"
 	}
 	if problem != nil {
 		state, code = "failed", problem.Code
 		if total == nil {
 			state = "uncertain"
 		}
+		diagnostic.Code = code
+	}
+	if diagnostic.Category == "" {
+		diagnostic.Category = state
+	}
+	diagnostic.MayBeCharged = problem == nil || !problem.KnownUnbilled
+	diagnostic.CostMicros = price
+	receipt, err := json.Marshal(diagnostic)
+	if err != nil {
+		return err
 	}
 	response.ReceiptID = res.ID
 	raw, err := json.Marshal(response)
@@ -246,8 +290,9 @@ func (s *Store) SettleContentModel(ctx context.Context, lease domain.Lease, res 
 		return err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE public.seo_content_model_calls SET state=$5,error_code=NULLIF($6,''),tokens=$7,cost_micros=$8,
-		data=$9::jsonb,settled_at=clock_timestamp() WHERE id=$1 AND organization_id=$2 AND job_id=$3 AND lease_token=$4
-		AND state IN ('reserved','uncertain')`, res.ID, lease.Job.OrganizationID, lease.Job.ID, lease.Token, state, code, total, price, string(raw))
+		data=$9::jsonb,diagnostic=$10::jsonb,settled_at=clock_timestamp()
+		WHERE id=$1 AND organization_id=$2 AND job_id=$3 AND lease_token=$4 AND state IN ('reserved','uncertain')`,
+		res.ID, lease.Job.OrganizationID, lease.Job.ID, lease.Token, state, code, total, price, string(raw), string(receipt))
 	if err != nil {
 		return err
 	}

@@ -136,8 +136,9 @@ func (s *Store) ReserveData(ctx context.Context, lease domain.Lease, scope domai
 	}
 	var receiptUnknown bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM public.seo_research_calls
-		WHERE organization_id=$1 AND job_id=$2 AND fingerprint=$3 AND state='uncertain')`,
-		job.OrganizationID, job.ID, fingerprint[:]).Scan(&receiptUnknown); err != nil {
+		WHERE organization_id=$1 AND fingerprint=$2 AND state='uncertain'
+		AND reserved_at >= clock_timestamp() - interval '1 day')`,
+		job.OrganizationID, fingerprint[:]).Scan(&receiptUnknown); err != nil {
 		return reservation, err
 	}
 	if receiptUnknown {
@@ -242,11 +243,31 @@ func (s *Store) SettleData(ctx context.Context, lease domain.Lease, id string, r
 	if err != nil {
 		return err
 	}
+	diagnostic := response.Diagnostic
+	diagnostic.CostMicros, diagnostic.Code = response.CostMicros, code
+	if diagnostic.Provider == "" {
+		diagnostic.Provider = domain.ProviderDataForSEO
+	}
+	if diagnostic.Category == "" {
+		diagnostic.Category = state
+	}
+	switch {
+	case failure != nil && failure.KnownUnbilled && response.CostMicros != nil && *response.CostMicros == 0:
+		diagnostic.CostSource, diagnostic.MayBeCharged = "unbilled", false
+	case response.CostMicros == nil:
+		diagnostic.CostSource, diagnostic.MayBeCharged = "unknown", true
+	default:
+		diagnostic.CostSource, diagnostic.MayBeCharged = "provider", *response.CostMicros > 0
+	}
+	receipt, err := json.Marshal(diagnostic)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE public.seo_research_calls SET state=$3,error_code=NULLIF($4,''),
 		cost_micros=$5,settled_at=clock_timestamp(),expires_at=$6,collected_at=$7,provider_task_id=NULLIF($8,''),
-		source=NULLIF($9,''),raw_response=$10,parsed_response=$11::jsonb
+		source=NULLIF($9,''),raw_response=$10,parsed_response=$11::jsonb,diagnostic=$12::jsonb
 		WHERE organization_id=$1 AND id=$2`, lease.Job.OrganizationID, id, state, code, response.CostMicros, expires,
-		response.CollectedAt, response.TaskID, response.Source, raw, string(data))
+		response.CollectedAt, response.TaskID, response.Source, raw, string(data), string(receipt))
 	if err != nil {
 		return err
 	}

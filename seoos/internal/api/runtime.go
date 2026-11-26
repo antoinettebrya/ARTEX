@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,12 +34,18 @@ func (h *handler) serveRuntime(w http.ResponseWriter, r *http.Request, principal
 		default:
 			methodNotAllowed(w, "GET, HEAD, POST")
 		}
+	case h.providers != nil && path == providers+"/receipts":
+		h.providerReceipts(w, r, principal)
 	case h.providers != nil && strings.HasPrefix(path, providers+"/"):
-		id, test := strings.CutSuffix(strings.TrimPrefix(path, providers+"/"), "/test")
+		id, operation, _ := strings.Cut(strings.TrimPrefix(path, providers+"/"), "/")
 		if !domain.ValidID(id) {
 			writeError(w, http.StatusNotFound, "not_found", "Provider not found.")
-		} else if test {
+		} else if operation == "test" {
 			h.testProvider(w, r, principal, id)
+		} else if operation == "reconcile" {
+			h.providerReconciliation(w, r, principal, id)
+		} else if operation != "" || strings.HasSuffix(path, "/") {
+			writeError(w, http.StatusNotFound, "not_found", "Provider operation not found.")
 		} else if r.Method != http.MethodPut {
 			methodNotAllowed(w, "PUT")
 		} else {
@@ -48,6 +55,44 @@ func (h *handler) serveRuntime(w http.ResponseWriter, r *http.Request, principal
 		return false
 	}
 	return true
+}
+
+func (h *handler) providerReceipts(w http.ResponseWriter, r *http.Request, actor domain.Principal) {
+	if !readMethod(r.Method) {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if actor.Role != domain.RoleOwner {
+		forbidden(w)
+		return
+	}
+	if limit, offset, ok := readPage(w, r, "provider_id"); ok {
+		items, err := h.providers.ListProviderReceipts(r.Context(), actor.OrganizationID, r.URL.Query().Get("provider_id"), limit, offset)
+		writeRuntimeResult(w, http.StatusOK, map[string]any{"items": items}, err)
+	}
+}
+
+func (h *handler) providerReconciliation(w http.ResponseWriter, r *http.Request, actor domain.Principal, id string) {
+	if !readMethod(r.Method) {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if actor.Role != domain.RoleOwner {
+		forbidden(w)
+		return
+	}
+	if !checkQuery(w, r, "day", "vendor_micros") {
+		return
+	}
+	params := r.URL.Query()
+	day, dayErr := time.Parse(time.DateOnly, params.Get("day"))
+	total, totalErr := strconv.ParseInt(params.Get("vendor_micros"), 10, 64)
+	if dayErr != nil || totalErr != nil || day.Year() < 2000 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Provide a UTC day and the vendor USD total in micros.")
+		return
+	}
+	row, err := h.providers.ReconcileProvider(r.Context(), actor.OrganizationID, id, day, total)
+	writeRuntimeResult(w, http.StatusOK, row, err)
 }
 
 func (h *handler) testProvider(w http.ResponseWriter, r *http.Request, principal domain.Principal, id string) {
@@ -67,11 +112,12 @@ func (h *handler) testProvider(w http.ResponseWriter, r *http.Request, principal
 		writeRuntimeResult(w, http.StatusOK, nil, err)
 		return
 	}
-	start := time.Now()
+	status, diagnostic := h.providerProbe.Test(r.Context(), access)
 	result := domain.ProviderTestResult{
-		Status:          h.providerProbe.Test(r.Context(), access),
-		DurationMS:      time.Since(start).Milliseconds(),
+		Status:          status,
+		DurationMS:      diagnostic.DurationMS,
 		ProviderVersion: access.Provider.Version,
+		Diagnostic:      &diagnostic,
 	}
 	// Complete the audit if the browser closes while the provider is responding.
 	auditContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)

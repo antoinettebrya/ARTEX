@@ -9,6 +9,7 @@ const sitePath = new RegExp(`^/sites/${ID}$`);
 const jobPath = new RegExp(`^/jobs/${ID}$`);
 const providerPath = new RegExp(`^/providers/${ID}$`);
 const providerTestPath = new RegExp(`^/providers/${ID}/test$`);
+const providerReconcilePath = new RegExp(`^/providers/${ID}/reconcile$`);
 const memberRolePath = new RegExp(`^/members/${ID}/role$`);
 const memberTokenPath = new RegExp(`^/members/${ID}/token$`);
 const snapshotPath = new RegExp(`^/research/snapshots/${ID}$`);
@@ -79,6 +80,8 @@ function permits(path: string, method: string): boolean {
         executionSitemapPath.test(path) ||
         path === "/me" ||
         path === "/audit" ||
+        path === "/providers/receipts" ||
+        providerReconcilePath.test(path) ||
         sitePath.test(path) ||
         jobPath.test(path) ||
         snapshotPath.test(path) ||

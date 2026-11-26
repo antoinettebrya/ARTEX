@@ -40,6 +40,7 @@ func (p ContentModelProfile) Validate() error {
 		p.MaxInputTokens < 1024 || p.MaxInputTokens > 48000 || p.DailyTokens < 1 || p.DailyTokens > 1000000000 ||
 		p.DailyCostMicros < 1 || p.DailyCostMicros > 100000000000 ||
 		p.InputMicrosPerMillion < 1 || p.InputMicrosPerMillion > 10000000000 ||
+		p.CachedInputMicrosPerMillion != nil && (*p.CachedInputMicrosPerMillion < 0 || *p.CachedInputMicrosPerMillion > p.InputMicrosPerMillion) ||
 		p.OutputMicrosPerMillion < 1 || p.OutputMicrosPerMillion > 10000000000 ||
 		p.MaxRetries < 0 || p.MaxRetries > 2 || p.RetrySeconds < 1 || p.RetrySeconds > 120 {
 		return invalid("profile", "configure bounded token limits, USD rates, temperature and retries")

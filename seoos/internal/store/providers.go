@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Autumn-27/artex/seoos/internal/contentmodel"
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -31,19 +32,23 @@ func (s *Store) SetProviderKey(key []byte) error {
 }
 
 const providerColumns = `id::text, organization_id::text, name, model, timeout_seconds,
-	requests_per_minute, requests_per_day, max_output_tokens, enabled, version, created_at, updated_at, kind, daily_cost_micros`
+	requests_per_minute, requests_per_day, max_output_tokens, enabled, version, created_at, updated_at, kind, daily_cost_micros, model_options`
 
 func scanProvider(row rowScanner, tail ...any) (domain.Provider, error) {
 	var provider domain.Provider
+	var options []byte
 	dest := []any{&provider.ID, &provider.OrganizationID, &provider.Name, &provider.Model, &provider.TimeoutSeconds,
 		&provider.RequestsPerMinute, &provider.RequestsPerDay, &provider.MaxOutputTokens, &provider.Enabled,
-		&provider.Version, &provider.CreatedAt, &provider.UpdatedAt, &provider.Kind, &provider.DailyCostMicros}
+		&provider.Version, &provider.CreatedAt, &provider.UpdatedAt, &provider.Kind, &provider.DailyCostMicros, &options}
 	err := row.Scan(append(dest, tail...)...)
 	provider.CreatedAt = provider.CreatedAt.UTC()
 	provider.UpdatedAt = provider.UpdatedAt.UTC()
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "seo_providers_organization_id_name_key" {
 		return domain.Provider{}, domain.ErrProviderNameTaken
+	}
+	if err == nil && len(options) > 0 {
+		err = json.Unmarshal(options, &provider.ModelOptions)
 	}
 	return provider, classifyError(err)
 }
@@ -115,15 +120,23 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 		return domain.Provider{}, err
 	}
 	defer tx.Rollback()
+	var options any
+	if input.ModelOptions != nil {
+		raw, err := json.Marshal(input.ModelOptions)
+		if err != nil {
+			return domain.Provider{}, err
+		}
+		options = string(raw)
+	}
 	settings := []any{orgID, id, input.Name, input.Model, sealed, input.TimeoutSeconds,
-		input.RequestsPerMinute, input.RequestsPerDay, input.MaxOutputTokens, input.Enabled, input.Kind, input.DailyCostMicros}
+		input.RequestsPerMinute, input.RequestsPerDay, input.MaxOutputTokens, input.Enabled, input.Kind, input.DailyCostMicros, options}
 	var provider domain.Provider
 	var details any
 	action := "provider.create"
 	if creating {
 		provider, err = scanProvider(tx.QueryRowContext(ctx, `INSERT INTO public.seo_providers
-			(organization_id, id, name, model, credential, timeout_seconds, requests_per_minute, requests_per_day, max_output_tokens, enabled, kind, daily_cost_micros)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+providerColumns, settings...))
+			(organization_id, id, name, model, credential, timeout_seconds, requests_per_minute, requests_per_day, max_output_tokens, enabled, kind, daily_cost_micros, model_options)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb) RETURNING `+providerColumns, settings...))
 		details = provider
 	} else {
 		before, err := scanProvider(tx.QueryRowContext(ctx, `SELECT `+providerColumns+` FROM public.seo_providers
@@ -137,9 +150,16 @@ func (s *Store) SaveProvider(ctx context.Context, orgID, id string, input domain
 		if before.Version != input.Version {
 			return domain.Provider{}, domain.ErrVersionConflict
 		}
+		if input.Kind == domain.ProviderCompatible && input.ModelOptions != nil && sealed == nil {
+			old, now := before.Options(), *input.ModelOptions
+			if old.BaseURL != now.BaseURL || old.AuthHeader != now.AuthHeader || old.AuthMode != now.AuthMode {
+				return domain.Provider{}, &domain.ValidationError{Field: "api_key", Message: "re-enter the credential for changed routing or authentication"}
+			}
+		}
 		updated, err := scanProvider(tx.QueryRowContext(ctx, `UPDATE public.seo_providers SET name=$3, model=$4,
 			credential=COALESCE($5::bytea, credential), timeout_seconds=$6, requests_per_minute=$7, requests_per_day=$8,
-			max_output_tokens=$9, enabled=$10, kind=$11, daily_cost_micros=$12, version=version+1, updated_at=clock_timestamp()
+			max_output_tokens=$9, enabled=$10, kind=$11, daily_cost_micros=$12, model_options=COALESCE($13::jsonb,model_options),
+			version=version+1, updated_at=clock_timestamp()
 			WHERE organization_id=$1 AND id=$2 RETURNING `+providerColumns, settings...))
 		if err != nil {
 			return domain.Provider{}, err
@@ -241,7 +261,7 @@ func (s *Store) RecordProviderTest(ctx context.Context, orgID, id string, result
 
 // ReserveProviderCall serializes spend per provider. Failed and interrupted
 // attempts still consume their reservation because the provider may have billed them.
-func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (domain.ProviderCall, error) {
+func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease, requests ...domain.ContentModelRequest) (domain.ProviderCall, error) {
 	if s.providerCipher == nil {
 		return domain.ProviderCall{}, domain.ErrProviderNotConfigured
 	}
@@ -262,6 +282,26 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	}
 	if !provider.Enabled || provider.Kind != domain.ProviderOpenAI {
 		return domain.ProviderCall{}, domain.ErrProviderDisabled
+	}
+	var priorState string
+	var prior []byte
+	err = tx.QueryRowContext(ctx, `SELECT state,outcome FROM public.seo_provider_calls
+		WHERE organization_id=$1 AND job_id=$2 ORDER BY reserved_at DESC LIMIT 1`,
+		job.OrganizationID, job.ID).Scan(&priorState, &prior)
+	switch {
+	case err == nil:
+		if priorState == "reserved" || priorState == "uncertain" {
+			return domain.ProviderCall{}, &domain.DataError{Code: "provider_receipt_unknown"}
+		}
+		var cached domain.JobOutcome
+		if err = json.Unmarshal(prior, &cached); err != nil {
+			return domain.ProviderCall{}, err
+		}
+		if priorState == "succeeded" || !cached.Retry {
+			return domain.ProviderCall{Provider: provider, Cached: &cached}, nil
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return domain.ProviderCall{}, err
 	}
 	var now time.Time
 	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
@@ -287,10 +327,49 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	if err != nil {
 		return domain.ProviderCall{}, domain.ErrProviderNotConfigured
 	}
+	call := domain.ProviderCall{Provider: provider, APIKey: string(key)}
+	var pricing []byte
+	err = tx.QueryRowContext(ctx, `SELECT data FROM public.seo_content_model_profiles WHERE organization_id=$1 AND provider_id=$2`,
+		job.OrganizationID, provider.ID).Scan(&pricing)
+	if err == nil {
+		if err = json.Unmarshal(pricing, &call.Pricing); err != nil {
+			return domain.ProviderCall{}, err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return domain.ProviderCall{}, err
+	}
+	if call.Pricing != nil {
+		forecast := int64(512)
+		if len(requests) != 0 {
+			forecast, err = contentmodel.EstimateInputTokens(requests[0], provider, *call.Pricing)
+			if err != nil {
+				return domain.ProviderCall{}, &domain.DataError{Code: "content_model_invalid_request", KnownUnbilled: true}
+			}
+		}
+		call.ReservedTokens = forecast + int64(provider.MaxOutputTokens)
+		call.ReservedMicros = modelCharge(*call.Pricing, forecast, int64(provider.MaxOutputTokens))
+		if forecast > int64(call.Pricing.MaxInputTokens) || call.ReservedTokens > call.Pricing.DailyTokens ||
+			call.ReservedMicros > call.Pricing.DailyCostMicros {
+			return domain.ProviderCall{}, &domain.DataError{Code: "content_model_budget_too_low", KnownUnbilled: true}
+		}
+		var usedTokens, usedMicros int64
+		if err = tx.QueryRowContext(ctx, modelDailySpend, job.OrganizationID, provider.ID, dayStart).Scan(&usedTokens, &usedMicros); err != nil {
+			return domain.ProviderCall{}, err
+		}
+		if usedTokens > call.Pricing.DailyTokens-call.ReservedTokens || usedMicros > call.Pricing.DailyCostMicros-call.ReservedMicros {
+			return domain.ProviderCall{DeferUntil: dayStart.AddDate(0, 0, 1)}, nil
+		}
+	}
+	reservation, err := json.Marshal(domain.ProviderReceipt{Provider: provider.Kind, Operation: provider.Model,
+		Category: "reserved", MayBeCharged: true, CostSource: "unknown",
+		ReservedTokens: call.ReservedTokens, ReservedMicros: call.ReservedMicros})
+	if err != nil {
+		return domain.ProviderCall{}, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_provider_calls
-		(organization_id, provider_id, lease_token, job_id, reserved_at, output_token_limit)
-		VALUES ($1,$2,$3,$4,$5,$6)`, job.OrganizationID, provider.ID, lease.Token,
-		job.ID, now, provider.MaxOutputTokens)
+		(organization_id, provider_id, lease_token, job_id, reserved_at, output_token_limit,state,diagnostic)
+		VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7::jsonb)`, job.OrganizationID, provider.ID, lease.Token,
+		job.ID, now, provider.MaxOutputTokens, string(reservation))
 	if err != nil {
 		return domain.ProviderCall{}, err
 	}
@@ -301,5 +380,49 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	if err := tx.Commit(); err != nil {
 		return domain.ProviderCall{}, err
 	}
-	return domain.ProviderCall{Provider: provider, APIKey: string(key)}, nil
+	return call, nil
+}
+
+func (s *Store) SettleProviderCall(ctx context.Context, lease domain.Lease, call domain.ProviderCall, result domain.JobOutcome) error {
+	state := "succeeded"
+	receipt := domain.ProviderReceipt{Provider: call.Provider.Kind, Operation: call.Provider.Model, CostSource: "unknown"}
+	if result.Diagnostic != nil {
+		receipt = *result.Diagnostic
+	}
+	receipt.ReservedTokens, receipt.ReservedMicros = call.ReservedTokens, call.ReservedMicros
+	if result.Code != "" {
+		state = "failed"
+		if receipt.MayBeCharged && receipt.InputTokens == nil {
+			state = "uncertain"
+		}
+		receipt.Code = result.Code
+	}
+	if receipt.Category == "" {
+		receipt.Category = state
+	}
+	if result.Diagnostic != nil && !receipt.MayBeCharged {
+		zero := int64(0)
+		receipt.CostMicros, receipt.CostSource = &zero, "unbilled"
+	} else if call.Pricing != nil && receipt.InputTokens != nil && receipt.OutputTokens != nil {
+		cost := measuredModelCharge(*call.Pricing, *receipt.InputTokens, *receipt.OutputTokens, receipt.CachedTokens)
+		receipt.CostMicros, receipt.CostSource = &cost, "estimated"
+	}
+	outcome, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	metadata, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	update, err := s.db.ExecContext(ctx, `UPDATE public.seo_provider_calls SET state=$4,outcome=$5::jsonb,diagnostic=$6::jsonb
+		WHERE organization_id=$1 AND job_id=$2 AND lease_token=$3 AND state='reserved'`,
+		lease.Job.OrganizationID, lease.Job.ID, lease.Token, state, string(outcome), string(metadata))
+	if err != nil {
+		return err
+	}
+	if n, err := update.RowsAffected(); err != nil || n != 1 {
+		return domain.ErrLeaseLost
+	}
+	return nil
 }

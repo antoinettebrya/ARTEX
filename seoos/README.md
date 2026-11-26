@@ -52,6 +52,8 @@ npm start -- --hostname 127.0.0.1
 
 在 Provider 页的「大模型服务」选择 OpenAI、Claude、Gemini 或 DeepSeek，填写该厂商的 API 密钥与模型 ID。需要分配内容生产或独立审核角色时，使用模型行的设置按钮。在「DataForSEO 数据源」使用 DataForSEO API Access 中的登录名和 API 密码，并设置每日 USD 预算。保存后可在记录行点击「测试连接」，查看厂商验证结果。
 
+新的 OpenAI 兼容 Provider 支持 HTTPS Base URL、认证 Header、Responses 或 Chat Completions。模型能力和请求诊断沿用现有 Provider 页面。[接口、错误回执、费用对账与验收记录](../docs/seo-os/AI_DATA_INTEGRATION_AUDIT.md)
+
 `/seo/api/` 在 Next.js 服务端把同源请求转给 SEO Go API。会话凭据保存在有效期 8 小时的 HttpOnly、Secure、SameSite=Lax Cookie 中，作用域是 `/seo`。远程使用请配置 HTTPS，并让反向代理保留请求 Host 和原始协议。同源服务端转发需要 `next start` 或 `next dev`。原应用的静态导出仍可单独构建。
 
 在 `/seo/research` 可以提交和查看关键词拓展、指标、SERP、竞品页面、意图、聚类、Keyword-to-URL 与机会评分。站点详情可直接进入该站点的研究面板。组织所有者先在 Provider 页登记 DataForSEO 登录名、API 密码、请求限额和每日 USD 预算。市场代码、API 契约和回退流程见 [Phase 2 文档](../docs/seo-os/PHASE2_RESEARCH.md)。

@@ -238,6 +238,7 @@ export type ContentModelProfile = {
   daily_tokens: number;
   daily_cost_micros: number;
   input_micros_per_million: number;
+  cached_input_micros_per_million?: number;
   output_micros_per_million: number;
   max_retries: number;
   retry_seconds: number;

@@ -107,6 +107,22 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 	if !executionConnectionKind(in.Kind, connection.Kind) {
 		return empty, false, domain.ErrExecutionUnsupported
 	}
+	if executionAnalytics(connection.Kind) && (in.Kind == domain.ExecGSCSync || in.Kind == domain.ExecGA4Sync || in.Kind == domain.ExecBingSync) {
+		existing, existingErr := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+`
+			FROM public.seo_jobs WHERE organization_id=$1 AND id=(
+				SELECT e.job_id FROM public.seo_execution_jobs e JOIN public.seo_jobs j
+				ON (j.organization_id,j.id)=(e.organization_id,e.job_id)
+				WHERE e.organization_id=$1 AND e.site_id=$2 AND e.connection_id=$3 AND e.connection_version=$4
+				AND (e.request - 'idempotency_key' - 'priority')=($5::jsonb - 'idempotency_key' - 'priority')
+				AND (j.state IN ('queued','running') OR (j.state='succeeded' AND j.updated_at>clock_timestamp()-interval '2 minutes'))
+				ORDER BY j.created_at DESC LIMIT 1)`, org, in.SiteID, in.ConnectionID, connection.Version, string(raw)))
+		if existingErr == nil {
+			return existing, false, tx.Commit()
+		}
+		if !errors.Is(existingErr, domain.ErrNotFound) {
+			return empty, false, existingErr
+		}
+	}
 	var release domain.ExecutionRelease
 	var available *time.Time
 	if in.PublicationID != "" {

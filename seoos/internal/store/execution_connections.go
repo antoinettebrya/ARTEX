@@ -261,43 +261,43 @@ func (s *Store) ConsumeOAuthState(ctx context.Context, c domain.ExecutionConnect
 	return string(clear), nil
 }
 
-func (s *Store) UseExecutionRequest(ctx context.Context, org, site, connection string, version int64, lease *domain.Lease) error {
+func (s *Store) ReserveExecutionRequest(ctx context.Context, org, site, connection string, version int64, lease *domain.Lease) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	var jobID string
 	if lease != nil {
 		job, err := lockLease(ctx, tx, *lease)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if job.OrganizationID != org || job.SiteID != site {
-			return domain.ErrExecutionAuthority
+			return 0, domain.ErrExecutionAuthority
 		}
 		jobID = job.ID
 	} else if !executionOwner(ctx, org) {
-		return domain.ErrExecutionAuthority
+		return 0, domain.ErrExecutionAuthority
 	}
 	rpm, dayLimit := 60, 1000
 	if connection != "" {
 		c, _, active, err := execConnection(ctx, tx, org, site, connection, "FOR NO KEY UPDATE OF c")
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if !active || !c.Enabled || c.Version != version {
-			return domain.ErrExecutionAuthority
+			return 0, domain.ErrExecutionAuthority
 		}
 		rpm, dayLimit = c.RequestsPerMinute, c.RequestsPerDay
 	} else if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "execution:"+org+":"+site); err != nil {
-		return err
+		return 0, err
 	}
 	var minuteCount, dayCount int
 	var oldest sql.NullTime
 	var now time.Time
 	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
-		return err
+		return 0, err
 	}
 	day := now.UTC().Truncate(24 * time.Hour)
 	minute := now.Add(-time.Minute)
@@ -307,7 +307,7 @@ func (s *Store) UseExecutionRequest(ctx context.Context, org, site, connection s
 		AND connection_id IS NOT DISTINCT FROM NULLIF($3,'')::uuid AND requested_at >= least($4::timestamptz,$5::timestamptz)`,
 		org, site, connection, minute, day).Scan(&minuteCount, &dayCount, &oldest)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var wait time.Duration
 	if dayCount >= dayLimit {
@@ -316,12 +316,23 @@ func (s *Store) UseExecutionRequest(ctx context.Context, org, site, connection s
 		wait = oldest.Time.Add(time.Minute).Sub(now)
 	}
 	if wait > 0 {
-		return &domain.DataError{Code: "execution_budget", Retry: true, RetryAfter: wait, KnownUnbilled: true}
+		return 0, &domain.DataError{Code: "execution_budget", Retry: true, RetryAfter: wait, KnownUnbilled: true}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_execution_request_calls (organization_id,site_id,connection_id,job_id)
-		VALUES ($1,$2,NULLIF($3,'')::uuid,NULLIF($4,'')::uuid)`, org, site, connection, jobID)
+	var id int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO public.seo_execution_request_calls (organization_id,site_id,connection_id,job_id)
+		VALUES ($1,$2,NULLIF($3,'')::uuid,NULLIF($4,'')::uuid) RETURNING id`, org, site, connection, jobID).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+func (s *Store) SettleExecutionRequest(ctx context.Context, org, site string, id int64, receipt domain.ProviderReceipt) error {
+	raw, err := json.Marshal(receipt)
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	_, err = s.db.ExecContext(ctx, `UPDATE public.seo_execution_request_calls SET diagnostic=$4::jsonb
+		WHERE organization_id=$1 AND site_id=$2 AND id=$3 AND diagnostic IS NULL`, org, site, id, string(raw))
+	return err
 }

@@ -24,7 +24,8 @@ type executionRepository interface {
 	OAuthState(context.Context, domain.ExecutionConnection) (string, string, error)
 	ConsumeOAuthState(context.Context, domain.ExecutionConnection, string) (string, error)
 	SaveExecutionTokens(context.Context, domain.ExecutionConnection, domain.ExecutionCredential) error
-	UseExecutionRequest(context.Context, string, string, string, int64, *domain.Lease) error
+	ReserveExecutionRequest(context.Context, string, string, string, int64, *domain.Lease) (int64, error)
+	SettleExecutionRequest(context.Context, string, string, int64, domain.ProviderReceipt) error
 }
 
 func (h *handler) serveExecution(w http.ResponseWriter, r *http.Request, actor domain.Principal) bool {
@@ -187,8 +188,15 @@ func (h *handler) executionOAuth(w http.ResponseWriter, r *http.Request, repo ex
 		executionResult(w, 200, nil, err)
 		return
 	}
-	client := executionhttp.Client(h.executionFixture, time.Duration(c.TimeoutSeconds)*time.Second, func(ctx context.Context) error {
-		return repo.UseExecutionRequest(ctx, c.OrganizationID, c.SiteID, c.ID, c.Version, nil)
+	client := executionhttp.Client(h.executionFixture, time.Duration(c.TimeoutSeconds)*time.Second, executionhttp.Ledger{
+		Provider: c.Kind,
+		Secrets:  []string{s.ClientSecret, s.RefreshToken, s.AccessToken, input.Code, proof},
+		Reserve: func(ctx context.Context) (int64, error) {
+			return repo.ReserveExecutionRequest(ctx, c.OrganizationID, c.SiteID, c.ID, c.Version, nil)
+		},
+		Settle: func(ctx context.Context, id int64, receipt domain.ProviderReceipt) error {
+			return repo.SettleExecutionRequest(ctx, c.OrganizationID, c.SiteID, id, receipt)
+		},
 	})
 	token, err := executionsearch.New(client).Exchange(ctx, c, s, input.Code, proof)
 	if err == nil {

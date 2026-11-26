@@ -164,14 +164,15 @@ func mockGSC(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		}})
 	case scopePath + "/searchAnalytics/query":
 		var request struct {
-			From       string   `json:"startDate"`
-			To         string   `json:"endDate"`
-			Dimensions []string `json:"dimensions"`
-			Type       string   `json:"type"`
-			State      string   `json:"dataState"`
-			Limit      int      `json:"rowLimit"`
-			Offset     int      `json:"startRow"`
-			Filters    []struct {
+			From        string   `json:"startDate"`
+			To          string   `json:"endDate"`
+			Dimensions  []string `json:"dimensions"`
+			Type        string   `json:"type"`
+			State       string   `json:"dataState"`
+			Aggregation string   `json:"aggregationType"`
+			Limit       int      `json:"rowLimit"`
+			Offset      int      `json:"startRow"`
+			Filters     []struct {
 				Filters []struct {
 					Dimension  string `json:"dimension"`
 					Operator   string `json:"operator"`
@@ -183,7 +184,7 @@ func mockGSC(t *testing.T, w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request", 400)
 			return
 		}
-		if request.From != sampleDay || request.To != sampleDay || request.Type != "web" ||
+		if request.From != sampleDay || request.To != sampleDay || request.Type != "web" || request.Aggregation != "byPage" ||
 			request.State != "final" || request.Limit != reportPageSize || !slices.Equal(request.Dimensions, gscDimensions) ||
 			len(request.Filters) != 1 || len(request.Filters[0].Filters) != 1 {
 			t.Error("Search Console request did not preserve its data dimensions and scope")
@@ -219,6 +220,22 @@ func mockGSC(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	default:
 		t.Errorf("unexpected Search Console path %q", r.URL.EscapedPath())
 		http.NotFound(w, r)
+	}
+}
+
+func TestSearchKeepsPartialReportWhenRollingQuotaIsReached(t *testing.T) {
+	client := localClient(t, func(w http.ResponseWriter, r *http.Request) { mockGSC(t, w, r) })
+	preexistingUsage := client.http.Transport
+	var calls atomic.Int32
+	client.http.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if calls.Add(1) > 3 {
+			return nil, &domain.DataError{Code: "execution_budget", Retry: true, RetryAfter: time.Minute}
+		}
+		return preexistingUsage.RoundTrip(r)
+	})
+	report, err := client.Sync(t.Context(), connection(domain.ExecutionGSC, gscProperty), googleCredential(), sampleDay, sampleDay, 10)
+	if err != nil || !report.Truncated || report.Requests != 3 || len(report.Metrics) != reportPageSize-1 {
+		t.Fatalf("rolling quota discarded already collected rows: %d calls, %d rows, %v", report.Requests, len(report.Metrics), err)
 	}
 }
 

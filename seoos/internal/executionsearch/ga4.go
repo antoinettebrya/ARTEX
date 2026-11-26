@@ -34,10 +34,14 @@ func (s *report) ga4(from, to string) error {
 	if err := s.gaProperties(property); err != nil {
 		return err
 	}
+	if property != "" && len(s.output.Properties) == 0 {
+		return failure("execution_ga4_property_unavailable")
+	}
 	if property == "" || from == "" {
 		return nil
 	}
 	base, _ := siteURL(s.config.BaseURL)
+	var expectedCount *int
 	for offset := 0; ; {
 		var data gaReport
 		query := gaQuery(base, from, to, offset)
@@ -45,12 +49,18 @@ func (s *report) ga4(from, to string) error {
 			return err
 		}
 		s.output.Truncated = s.output.Truncated || data.Metadata.Threshold || data.Metadata.Other || len(data.Metadata.Sampling) > 0
+		if data.RowCount != nil && (*data.RowCount < 0 || expectedCount != nil && *expectedCount != *data.RowCount) {
+			s.output.Truncated = true
+		}
+		if expectedCount == nil {
+			expectedCount = data.RowCount
+		}
 		if err := s.recordGAReport(base, data, from, to); err != nil {
 			return err
 		}
 		offset += len(data.Rows)
-		if data.RowCount != nil {
-			if offset >= *data.RowCount {
+		if expectedCount != nil {
+			if offset >= *expectedCount {
 				return nil
 			}
 			if len(data.Rows) == 0 {
@@ -223,7 +233,7 @@ func (s *report) recordGAReport(base *url.URL, data gaReport, from, to string) e
 			}
 			metrics[key] = value
 		}
-		s.output.Metrics = append(s.output.Metrics, domain.ExecutionMetric{
+		s.addMetric(domain.ExecutionMetric{
 			Date: day, Page: landing, Country: get("country"), Device: get("deviceCategory"),
 			Language: get("language"), Values: metrics,
 		})

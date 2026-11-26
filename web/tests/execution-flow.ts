@@ -286,6 +286,10 @@ export async function runExecutionFlow({
 
   await tabs("Search Console");
   await page.getByRole("button", { name: "同步报告", exact: true }).click({ timeout: 10000 });
+  const reportDay = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+  const gscReport = page.getByRole("dialog", { name: "同步 Search Console", exact: true });
+  await gscReport.getByLabel("开始日期", { exact: true }).fill(reportDay);
+  await gscReport.getByLabel("结束日期", { exact: true }).fill(reportDay);
   await submitTask("同步 Search Console");
   const metrics = page.getByRole("table", { name: "Search Console 指标", exact: true });
   await expect(metrics).toContainText("phase4 organic query");

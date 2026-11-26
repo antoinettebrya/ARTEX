@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/seoos/internal/contentinventory"
 	"github.com/Autumn-27/artex/seoos/internal/domain"
+	"github.com/Autumn-27/artex/seoos/internal/providerhttp"
 )
 
 const maxResponse = 1 << 20
@@ -21,7 +23,7 @@ const maxResponse = 1 << 20
 type Client struct{ http http.Client }
 
 func New(fixture *http.Client) *Client {
-	var client http.Client
+	client := *contentinventory.NewPublicHTTPClient(8 * time.Second)
 	if fixture != nil {
 		client = *fixture
 	}
@@ -41,6 +43,8 @@ func target(provider domain.Provider) string {
 		return "https://generativelanguage.googleapis.com/v1beta/models/" + model
 	case domain.ProviderDeepSeek:
 		return "https://api.deepseek.com/models"
+	case domain.ProviderCompatible:
+		return provider.Options().BaseURL + "/models"
 	case domain.ProviderDataForSEO:
 		return "https://api.dataforseo.com/v3/appendix/user_data"
 	default:
@@ -48,7 +52,48 @@ func target(provider domain.Provider) string {
 	}
 }
 
-func (c *Client) Test(ctx context.Context, access domain.ProviderTestAccess) string {
+func (c *Client) Test(ctx context.Context, access domain.ProviderTestAccess) (string, domain.ProviderReceipt) {
+	provider := access.Provider
+	operation := "models"
+	if provider.Kind == domain.ProviderDataForSEO {
+		operation = "appendix_user_data"
+	}
+	zero := int64(0)
+	receipt := domain.ProviderReceipt{Provider: provider.Kind, Operation: operation, CostSource: "unbilled", CostMicros: &zero}
+	start := time.Now()
+	status := c.test(ctx, access, &receipt)
+	receipt.DurationMS = time.Since(start).Milliseconds()
+	if status == "ok" {
+		receipt.Category = "success"
+	} else {
+		receipt.Code = status
+		if receipt.HTTPStatus == 0 {
+			receipt.Category = "transport"
+		}
+		switch status {
+		case "timeout", "cancelled":
+			receipt.Category = status
+		case "invalid_credentials":
+			receipt.Category = "authentication"
+		case "model_not_found":
+			receipt.Category = "not_found"
+		case "access_denied", "address_not_allowed", "account_unverified":
+			receipt.Category = "permission"
+		case "upstream_rate_limited":
+			receipt.Category = "rate_limit"
+		case "insufficient_balance":
+			receipt.Category = "billing"
+		default:
+			if receipt.Category == "success" {
+				receipt.Category = "response"
+			}
+		}
+		receipt.Retryable = status == "timeout" || status == "upstream_rate_limited" || status == "unavailable"
+	}
+	return status, receipt
+}
+
+func (c *Client) test(ctx context.Context, access domain.ProviderTestAccess, receipt *domain.ProviderReceipt) string {
 	p := access.Provider
 	ctx, cancel := context.WithTimeout(ctx, min(8*time.Second, time.Duration(p.TimeoutSeconds)*time.Second))
 	defer cancel()
@@ -63,16 +108,21 @@ func (c *Client) Test(ctx context.Context, access domain.ProviderTestAccess) str
 	case domain.ProviderAnthropic:
 		req.Header.Set("x-api-key", access.APIKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
+		if workspace := p.Options().WorkspaceID; workspace != "" {
+			req.Header.Set("Anthropic-Workspace-Id", workspace)
+		}
 	case domain.ProviderGemini:
 		req.Header.Set("x-goog-api-key", access.APIKey)
 	default:
-		req.Header.Set("Authorization", "Bearer "+access.APIKey)
+		p.ModelAuthorization(req.Header, access.APIKey)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
 		return transportStatus(ctx, err)
 	}
 	defer res.Body.Close()
+	providerhttp.Response(receipt, res, access.APIKey, access.Login, access.Password, req.Header.Get("Authorization"))
+	receipt.Category = providerhttp.HTTPCategory(res.StatusCode)
 	switch res.StatusCode {
 	case http.StatusUnauthorized:
 		return "invalid_credentials"
@@ -81,7 +131,7 @@ func (c *Client) Test(ctx context.Context, access domain.ProviderTestAccess) str
 	case http.StatusTooManyRequests:
 		return "upstream_rate_limited"
 	case http.StatusNotFound:
-		if p.Kind != domain.ProviderDataForSEO && p.Kind != domain.ProviderDeepSeek {
+		if p.Kind != domain.ProviderDataForSEO && p.Kind != domain.ProviderDeepSeek && p.Kind != domain.ProviderCompatible {
 			return "model_not_found"
 		}
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
@@ -96,6 +146,7 @@ func (c *Client) Test(ctx context.Context, access domain.ProviderTestAccess) str
 		if len(body) > maxResponse {
 			return "unexpected_response"
 		}
+		providerhttp.ErrorDetails(receipt, body, access.APIKey, access.Login, access.Password)
 		return parseResponse(p, res.StatusCode, body)
 	}
 	if res.StatusCode == http.StatusForbidden {
@@ -165,8 +216,8 @@ func parseResponse(provider domain.Provider, httpStatus int, body []byte) string
 			}
 			return "model_unsupported"
 		}
-	case domain.ProviderDeepSeek:
-		if payload.Object == "list" && payload.Data != nil {
+	case domain.ProviderDeepSeek, domain.ProviderCompatible:
+		if (payload.Object == "list" || provider.Kind == domain.ProviderCompatible) && payload.Data != nil {
 			for _, model := range payload.Data {
 				if model.ID == provider.Model {
 					return "ok"

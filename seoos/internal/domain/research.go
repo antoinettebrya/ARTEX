@@ -191,6 +191,7 @@ type DataAccess struct {
 }
 
 type DataResponse struct {
+	Diagnostic  ProviderReceipt `json:"-"`
 	Raw         json.RawMessage `json:"-"`
 	TaskID      string          `json:"task_id"`
 	Source      string          `json:"source"`

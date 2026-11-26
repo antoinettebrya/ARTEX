@@ -48,15 +48,28 @@ func (s *report) gsc(from, to string) error {
 		return nil
 	}
 
+	day, _ := time.Parse(time.DateOnly, from)
+	end, _ := time.Parse(time.DateOnly, to)
+	for !day.After(end) {
+		if err := s.gscDay(base, endpoint, day.Format(time.DateOnly)); err != nil {
+			return err
+		}
+		day = day.AddDate(0, 0, 1)
+	}
+	return nil
+}
+
+func (s *report) gscDay(base *url.URL, endpoint, day string) error {
 	for offset := 0; ; offset += reportPageSize {
 		query := map[string]any{
-			"startDate":  from,
-			"endDate":    to,
-			"dimensions": gscDimensions,
-			"type":       "web",
-			"dataState":  "final",
-			"rowLimit":   reportPageSize,
-			"startRow":   offset,
+			"startDate":       day,
+			"endDate":         day,
+			"dimensions":      gscDimensions,
+			"aggregationType": "byPage",
+			"type":            "web",
+			"dataState":       "final",
+			"rowLimit":        reportPageSize,
+			"startRow":        offset,
 			"dimensionFilterGroups": []any{map[string]any{
 				"groupType": "and",
 				"filters": []any{map[string]any{
@@ -67,7 +80,8 @@ func (s *report) gsc(from, to string) error {
 			}},
 		}
 		var page struct {
-			Rows []struct {
+			Aggregation string `json:"responseAggregationType"`
+			Rows        []struct {
 				Keys        []string `json:"keys"`
 				Clicks      *float64 `json:"clicks"`
 				Impressions *float64 `json:"impressions"`
@@ -78,22 +92,29 @@ func (s *report) gsc(from, to string) error {
 		if err := s.request(http.MethodPost, endpoint+"/searchAnalytics/query", query, &page); err != nil {
 			return err
 		}
+		if page.Aggregation != "" && page.Aggregation != "byPage" {
+			return failure("execution_invalid_gsc_aggregation")
+		}
 		for _, row := range page.Rows {
 			if len(row.Keys) != len(gscDimensions) || !validWindow(row.Keys[0], row.Keys[0]) || row.Keys[0] == "" {
 				return failure("execution_invalid_gsc_row")
 			}
-			if row.Keys[0] < from || row.Keys[0] > to || !targetWithin(base, row.Keys[1]) {
+			if row.Keys[0] != day || !targetWithin(base, row.Keys[1]) {
 				continue
 			}
 			values := numericValues(map[string]*float64{
 				"clicks": row.Clicks, "impressions": row.Impressions, "ctr": row.CTR, "position": row.Position,
 			})
-			s.output.Metrics = append(s.output.Metrics, domain.ExecutionMetric{
+			s.addMetric(domain.ExecutionMetric{
 				Date: row.Keys[0], Page: row.Keys[1], Query: row.Keys[2],
 				Country: row.Keys[3], Device: row.Keys[4], Values: values,
 			})
 		}
 		if len(page.Rows) < reportPageSize {
+			return nil
+		}
+		if offset+reportPageSize >= 50000 {
+			s.output.Truncated = true
 			return nil
 		}
 	}

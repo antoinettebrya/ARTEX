@@ -13,7 +13,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { errorMessage, type Provider, type ProviderKind, SeoAPIError, seoRequest } from "@/lib/seo/client";
+import {
+  errorMessage,
+  type ModelOptions,
+  type Provider,
+  type ProviderKind,
+  SeoAPIError,
+  seoRequest,
+} from "@/lib/seo/client";
 import { usd } from "@/lib/seo/research";
 
 import { ModelProfileEditor } from "./content/forms";
@@ -24,6 +31,7 @@ import {
   Field,
   FormDialog,
   field,
+  formatTime,
   LoadError,
   PageFrame,
   PageSkeleton,
@@ -37,6 +45,7 @@ const modelNames: Record<Exclude<ProviderKind, "dataforseo">, string> = {
   anthropic: "Claude",
   gemini: "Gemini",
   deepseek: "DeepSeek",
+  openai_compatible: "OpenAI 兼容",
 };
 
 type ProviderCategory = "model" | "data";
@@ -95,6 +104,21 @@ function ProviderEditor({
     if (isData && Boolean(login) !== Boolean(password)) {
       throw new SeoAPIError(400, "provider_credentials_pair");
     }
+    const options = Object.fromEntries(
+      [
+        "base_url",
+        "protocol",
+        "auth_header",
+        "auth_mode",
+        "token_field",
+        "temperature",
+        "reasoning_effort",
+        "output_format",
+        "workspace_id",
+      ]
+        .map((name) => [name, field(data, name).trim()])
+        .filter(([, value]) => value),
+    );
     const providerSettings = isData
       ? {
           kind: "dataforseo",
@@ -107,19 +131,34 @@ function ProviderEditor({
           model: field(data, "model"),
           api_key: field(data, "api_key") || undefined,
           max_output_tokens: Number(field(data, "max_output_tokens")),
+          model_options: options,
         };
-    await seoRequest(provider ? `/providers/${provider.id}` : "/providers", {
-      method: provider ? "PUT" : "POST",
-      body: {
-        ...providerSettings,
-        name: field(data, "name"),
-        timeout_seconds: Number(field(data, "timeout_seconds")),
-        requests_per_minute: Number(field(data, "requests_per_minute")),
-        requests_per_day: Number(field(data, "requests_per_day")),
-        enabled: data.has("enabled"),
-        version: provider?.version,
-      },
-    });
+    try {
+      await seoRequest(provider ? `/providers/${provider.id}` : "/providers", {
+        method: provider ? "PUT" : "POST",
+        body: {
+          ...providerSettings,
+          name: field(data, "name"),
+          timeout_seconds: Number(field(data, "timeout_seconds")),
+          requests_per_minute: Number(field(data, "requests_per_minute")),
+          requests_per_day: Number(field(data, "requests_per_day")),
+          enabled: data.has("enabled"),
+          version: provider?.version,
+        },
+      });
+    } catch (error) {
+      if (
+        !isData &&
+        error instanceof SeoAPIError &&
+        error.code === "invalid_request" &&
+        ["api_key", "base_url", "auth_header", "output_format", "reasoning_effort", "workspace_id"].includes(
+          error.field ?? "",
+        )
+      ) {
+        throw new SeoAPIError(error.status, `provider_model_${error.field}`);
+      }
+      throw error;
+    }
     onSaved();
     toast.success("配置已保存，可在列表中测试连接。");
   }
@@ -220,6 +259,7 @@ function ProviderEditor({
               required
             />
           </Field>
+          <ModelCapabilities key={kind} kind={kind} options={provider?.model_options} />
         </>
       )}
       <Field id="provider-timeout" label="超时（秒）">
@@ -263,13 +303,139 @@ function ProviderEditor({
   );
 }
 
+function ModelCapabilities({ kind, options }: { kind: Exclude<ProviderKind, "dataforseo">; options?: ModelOptions }) {
+  const compatible = kind === "openai_compatible";
+  const [protocol, setProtocol] = useState(options?.protocol ?? "chat");
+  const efforts = kind === "deepseek" ? ["none", "high", "max"] : ["none", "minimal", "low", "medium", "high"];
+  if (kind === "openai" || compatible) efforts.push("xhigh");
+  return (
+    <details open={compatible || undefined} className="space-y-3 sm:col-span-2">
+      <summary className="cursor-pointer font-medium text-sm">接口和模型能力</summary>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {compatible && (
+          <>
+            <div className="sm:col-span-2">
+              <Field id="model-base-url" label="API Base URL">
+                <Input
+                  id="model-base-url"
+                  name="base_url"
+                  type="url"
+                  placeholder="https://api.example.com/v1"
+                  defaultValue={options?.base_url}
+                  required
+                  maxLength={2048}
+                />
+              </Field>
+            </div>
+            <Field id="model-protocol" label="接口协议">
+              <NativeSelect
+                id="model-protocol"
+                name="protocol"
+                value={protocol}
+                onChange={(e) => setProtocol(e.target.value)}
+                className="w-full"
+              >
+                <NativeSelectOption value="chat">Chat Completions</NativeSelectOption>
+                <NativeSelectOption value="responses">Responses</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            {protocol === "chat" && (
+              <Field id="model-token-field" label="输出 Token 参数">
+                <NativeSelect
+                  id="model-token-field"
+                  name="token_field"
+                  defaultValue={options?.token_field ?? ""}
+                  className="w-full"
+                >
+                  <NativeSelectOption value="">max_tokens（默认）</NativeSelectOption>
+                  <NativeSelectOption value="max_completion_tokens">max_completion_tokens</NativeSelectOption>
+                </NativeSelect>
+              </Field>
+            )}
+            <Field id="model-auth-header" label="认证 Header">
+              <Input
+                id="model-auth-header"
+                name="auth_header"
+                placeholder="默认 Authorization"
+                defaultValue={options?.auth_header}
+                maxLength={64}
+              />
+            </Field>
+            <Field id="model-auth-mode" label="认证方式">
+              <NativeSelect
+                id="model-auth-mode"
+                name="auth_mode"
+                defaultValue={options?.auth_mode ?? ""}
+                className="w-full"
+              >
+                <NativeSelectOption value="">随 Header 自动选择</NativeSelectOption>
+                <NativeSelectOption value="bearer">Bearer 密钥</NativeSelectOption>
+                <NativeSelectOption value="raw">原始密钥</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+          </>
+        )}
+        {kind === "anthropic" && (
+          <Field id="model-workspace" label="Claude Workspace ID（选填）">
+            <Input id="model-workspace" name="workspace_id" defaultValue={options?.workspace_id} maxLength={120} />
+          </Field>
+        )}
+        <Field id="model-temperature" label="Temperature">
+          <NativeSelect
+            id="model-temperature"
+            name="temperature"
+            defaultValue={options?.temperature ?? ""}
+            className="w-full"
+          >
+            <NativeSelectOption value="">按模型能力自动处理</NativeSelectOption>
+            <NativeSelectOption value="off">省略</NativeSelectOption>
+            <NativeSelectOption value="on">允许发送配置值</NativeSelectOption>
+          </NativeSelect>
+        </Field>
+        {kind !== "anthropic" && (
+          <Field id="model-reasoning" label="推理强度">
+            <NativeSelect
+              id="model-reasoning"
+              name="reasoning_effort"
+              defaultValue={options?.reasoning_effort ?? ""}
+              className="w-full"
+            >
+              <NativeSelectOption value="">厂商默认</NativeSelectOption>
+              {efforts.map((effort) => (
+                <NativeSelectOption key={effort} value={effort}>
+                  {effort}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+        )}
+        <Field id="model-output-format" label="输出格式">
+          <NativeSelect
+            id="model-output-format"
+            name="output_format"
+            defaultValue={options?.output_format ?? ""}
+            className="w-full"
+          >
+            <NativeSelectOption value="">按模型自动选择</NativeSelectOption>
+            <NativeSelectOption value="text">纯文本传输</NativeSelectOption>
+            {kind !== "anthropic" && <NativeSelectOption value="json_object">JSON Object</NativeSelectOption>}
+            {kind !== "deepseek" && <NativeSelectOption value="json_schema">严格 JSON Schema</NativeSelectOption>}
+          </NativeSelect>
+        </Field>
+      </div>
+    </details>
+  );
+}
+
 export function Providers() {
+  const { principal } = useSeoSession();
   return (
     <PageFrame title="Provider" description="管理大模型和 SEO 数据源的凭据、配额及连接状态。">
       <Tabs defaultValue="model">
         <TabsList aria-label="服务类型">
           <TabsTrigger value="model">{providerCategories.model.label}</TabsTrigger>
           <TabsTrigger value="data">{providerCategories.data.label}</TabsTrigger>
+          {principal.role === "owner" && <TabsTrigger value="diagnostics">请求诊断</TabsTrigger>}
         </TabsList>
         <TabsContent value="model">
           <ProviderPanel category="model" />
@@ -277,8 +443,100 @@ export function Providers() {
         <TabsContent value="data">
           <ProviderPanel category="data" />
         </TabsContent>
+        {principal.role === "owner" && (
+          <TabsContent value="diagnostics">
+            <ProviderDiagnostics />
+          </TabsContent>
+        )}
       </Tabs>
     </PageFrame>
+  );
+}
+
+type Receipt = {
+  call_id: string;
+  occurred_at: string;
+  diagnostic: {
+    provider: string;
+    operation: string;
+    http_status?: number;
+    request_id?: string;
+    code?: string;
+    upstream_code?: string;
+    parameter?: string;
+    category: string;
+    retryable?: boolean;
+    may_be_charged?: boolean;
+    duration_ms?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cost_micros?: number;
+    cost_source?: string;
+  };
+};
+
+const costSources: Record<string, string> = {
+  provider: "厂商回执",
+  estimated: "按 Token 估算",
+  no_metered_fee: "无单次计费",
+  unbilled: "未计费",
+  unknown: "金额待确认",
+};
+
+function ProviderDiagnostics() {
+  const list = useSeoRecords<Receipt>("/providers/receipts", "items");
+  return (
+    <section className="space-y-3">
+      <div className="flex justify-end">
+        <Button type="button" variant="outline" size="sm" onClick={list.refresh}>
+          <RefreshCw /> 更新诊断
+        </Button>
+      </div>
+      <RecordsTable
+        label="Provider 请求诊断"
+        columns={[
+          "服务 / API",
+          "HTTP / 耗时",
+          "分类 / 错误",
+          "请求 ID",
+          "Token（输入 / 输出）",
+          "费用（USD）",
+          "时间（UTC）",
+        ]}
+        empty="暂无调用记录"
+        list={list}
+      >
+        {list.records.map(({ call_id, occurred_at, diagnostic: d }) => (
+          <TableRow key={call_id}>
+            <TableCell className="px-3 py-2">
+              <div>{d.provider}</div>
+              <div className="text-muted-foreground">{d.operation}</div>
+            </TableCell>
+            <TableCell className="px-3 tabular-nums">
+              {d.http_status || "—"} / {d.duration_ms === undefined ? "—" : `${d.duration_ms} ms`}
+            </TableCell>
+            <TableCell className="px-3">
+              <div>{d.category}</div>
+              <div className="max-w-60 whitespace-normal break-all text-muted-foreground">
+                {[d.code, d.upstream_code, d.parameter].filter(Boolean).join(" · ")}
+              </div>
+              <div className="text-xs">
+                {[d.retryable && "可重试", d.may_be_charged && "可能已计费"].filter(Boolean).join(" · ")}
+              </div>
+            </TableCell>
+            <TableCell className="px-3 font-mono text-xs">{d.request_id || "—"}</TableCell>
+            <TableCell className="px-3 tabular-nums">
+              {d.input_tokens ?? "—"} / {d.output_tokens ?? "—"}
+            </TableCell>
+            <TableCell className="px-3 tabular-nums">
+              <div>{d.cost_micros == null ? "—" : (d.cost_micros / 1_000_000).toFixed(6)}</div>
+              <div className="text-muted-foreground text-xs">{costSources[d.cost_source ?? "unknown"]}</div>
+            </TableCell>
+            <TableCell className="px-3 tabular-nums">{formatTime(occurred_at)}</TableCell>
+          </TableRow>
+        ))}
+      </RecordsTable>
+    </section>
   );
 }
 

@@ -95,17 +95,19 @@ type JobOutcome struct {
 	Retry      bool
 	DeferUntil time.Time
 	RetryAfter time.Time
+	Diagnostic *ProviderReceipt `json:"-"`
 }
 
 type ProviderSettings struct {
-	Name              string `json:"name"`
-	Model             string `json:"model"`
-	TimeoutSeconds    int    `json:"timeout_seconds"`
-	RequestsPerMinute int    `json:"requests_per_minute"`
-	RequestsPerDay    int    `json:"requests_per_day"`
-	MaxOutputTokens   int    `json:"max_output_tokens,omitempty"`
-	Enabled           bool   `json:"enabled"`
-	DailyCostMicros   *int64 `json:"daily_cost_micros,omitempty"`
+	Name              string        `json:"name"`
+	Model             string        `json:"model"`
+	TimeoutSeconds    int           `json:"timeout_seconds"`
+	RequestsPerMinute int           `json:"requests_per_minute"`
+	RequestsPerDay    int           `json:"requests_per_day"`
+	MaxOutputTokens   int           `json:"max_output_tokens,omitempty"`
+	Enabled           bool          `json:"enabled"`
+	DailyCostMicros   *int64        `json:"daily_cost_micros,omitempty"`
+	ModelOptions      *ModelOptions `json:"model_options,omitempty"`
 }
 
 type ProviderInput struct {
@@ -126,7 +128,7 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 		in.Kind = ProviderOpenAI
 	}
 	if !IsModelProvider(in.Kind) && in.Kind != ProviderDataForSEO {
-		return in, invalid("kind", "must be openai, anthropic, gemini, deepseek or dataforseo")
+		return in, invalid("kind", "choose an AI model provider or DataForSEO")
 	}
 	if in.TimeoutSeconds < 1 || in.TimeoutSeconds > 30 {
 		return in, invalid("timeout_seconds", "must be between 1 and 30")
@@ -135,6 +137,9 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 		return in, invalid("request_budget", "set 1 to 60 requests per minute and 1 to 10000 per UTC day")
 	}
 	if in.Kind == ProviderDataForSEO {
+		if in.ModelOptions != nil {
+			return in, invalid("model_options", "DataForSEO does not use model options")
+		}
 		in.Model, in.MaxOutputTokens = "dataforseo-v3", 0
 		if in.DailyCostMicros == nil || *in.DailyCostMicros < 1 || *in.DailyCostMicros > 100000000000 {
 			return in, invalid("daily_cost_micros", "set a positive daily USD budget in micros")
@@ -157,7 +162,11 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 		if in.Login != "" || in.Password != "" || in.DailyCostMicros != nil {
 			return in, invalid("kind", "DataForSEO settings require a DataForSEO provider")
 		}
-		if in.Model == "" || len(in.Model) > 100 || !identifier(in.Model) {
+		modelValid := identifier(in.Model)
+		if in.Kind == ProviderCompatible {
+			modelValid = identifier(strings.ReplaceAll(in.Model, "/", "")) && !strings.Contains(in.Model, "..")
+		}
+		if in.Model == "" || len(in.Model) > 100 || !modelValid {
 			return in, invalid("model", "must be a provider model identifier")
 		}
 		if in.MaxOutputTokens < 16 || in.MaxOutputTokens > 4096 {
@@ -165,8 +174,19 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 		}
 		if creating || in.APIKey != "" {
 			if len(in.APIKey) < 16 || len(in.APIKey) > 512 || strings.ContainsFunc(in.APIKey, func(r rune) bool { return r < '!' || r > '~' }) {
-				return in, invalid("api_key", "must contain 16 to 512 non-whitespace ASCII characters")
+				return in, invalid("api_key", "provide a valid non-whitespace API key")
 			}
+		}
+		if in.ModelOptions != nil || creating && in.Kind == ProviderCompatible {
+			options := ModelOptions{}
+			if in.ModelOptions != nil {
+				options = *in.ModelOptions
+			}
+			options, err := options.normalize(in.Kind)
+			if err != nil {
+				return in, err
+			}
+			in.ModelOptions = &options
 		}
 	}
 	if creating && in.Version != 0 || !creating && in.Version < 1 {
@@ -190,6 +210,8 @@ type ProviderRepository interface {
 	SaveProvider(context.Context, string, string, ProviderInput) (Provider, error)
 	ReserveProviderTest(context.Context, string, string) (ProviderTestAccess, error)
 	RecordProviderTest(context.Context, string, string, ProviderTestResult) error
+	ListProviderReceipts(context.Context, string, string, int, int) ([]json.RawMessage, error)
+	ReconcileProvider(context.Context, string, string, time.Time, int64) (ProviderReconciliation, error)
 }
 
 const (
@@ -205,13 +227,18 @@ type ProviderTestAccess struct {
 }
 
 type ProviderTestResult struct {
-	Status          string `json:"status"`
-	DurationMS      int64  `json:"duration_ms"`
-	ProviderVersion int64  `json:"provider_version"`
+	Status          string           `json:"status"`
+	DurationMS      int64            `json:"duration_ms"`
+	ProviderVersion int64            `json:"provider_version"`
+	Diagnostic      *ProviderReceipt `json:"diagnostic,omitempty"`
 }
 
 type ProviderCall struct {
-	Provider   Provider
-	APIKey     string
-	DeferUntil time.Time
+	Provider       Provider
+	APIKey         string
+	Pricing        *ContentModelProfile
+	Cached         *JobOutcome
+	ReservedTokens int64
+	ReservedMicros int64
+	DeferUntil     time.Time
 }

@@ -27,7 +27,10 @@ type ExecutionServices struct {
 type executionRuntime interface {
 	ExecutionJob(context.Context, domain.Lease) (domain.ExecutionWork, error)
 	ExecutionConnectionAccess(context.Context, string, string, string) (domain.ExecutionConnection, domain.ExecutionCredential, error)
-	UseExecutionRequest(context.Context, string, string, string, int64, *domain.Lease) error
+	ReserveExecutionRequest(context.Context, string, string, string, int64, *domain.Lease) (int64, error)
+	SettleExecutionRequest(context.Context, string, string, int64, domain.ProviderReceipt) error
+	BeginExecutionSubmission(context.Context, domain.Lease, string, string) error
+	ExecutionSubmissionFailure(context.Context, domain.Lease, string, string, int, string, bool) error
 	SaveExecutionTokens(context.Context, domain.ExecutionConnection, domain.ExecutionCredential) error
 	ExecutionSyncDates(context.Context, domain.ExecutionConnection, domain.ExecutionJobInput) (string, string, error)
 	SaveExecutionResult(context.Context, domain.Lease, domain.ExecutionWork, store.ExecutionResult) (json.RawMessage, error)
@@ -81,8 +84,15 @@ func executionJob(ctx context.Context, repo repository, lease domain.Lease, site
 		}
 		timeout = time.Duration(s.connection.TimeoutSeconds) * time.Second
 	}
-	s.client = executionhttp.Client(services.Fixture, timeout, func(ctx context.Context) error {
-		return runtime.UseExecutionRequest(ctx, site.OrganizationID, site.ID, work.Input.ConnectionID, work.ConnectionVersion, &lease)
+	s.client = executionhttp.Client(services.Fixture, timeout, executionhttp.Ledger{
+		Provider: s.connection.Kind,
+		Secrets:  []string{s.secret.Secret, s.secret.ClientSecret, s.secret.RefreshToken, s.secret.AccessToken},
+		Reserve: func(ctx context.Context) (int64, error) {
+			return runtime.ReserveExecutionRequest(ctx, site.OrganizationID, site.ID, work.Input.ConnectionID, work.ConnectionVersion, &lease)
+		},
+		Settle: func(ctx context.Context, id int64, receipt domain.ProviderReceipt) error {
+			return runtime.SettleExecutionRequest(ctx, site.OrganizationID, site.ID, id, receipt)
+		},
 	})
 	in := work.Input
 	if domain.IsCMSConnection(s.connection.Kind) {
@@ -238,6 +248,9 @@ func (s executionScope) search(ctx context.Context, onlySitemaps bool) (*domain.
 		}
 	}
 	limit := min(14, s.connection.RequestsPerMinute, s.connection.RequestsPerDay)
+	if s.connection.Kind == domain.ExecutionGSC {
+		limit = min(32, s.connection.RequestsPerMinute, s.connection.RequestsPerDay)
+	}
 	if (s.connection.Kind == domain.ExecutionGSC || s.connection.Kind == domain.ExecutionGA4) &&
 		(s.secret.ExpiresAt == nil || time.Until(*s.secret.ExpiresAt) < time.Minute || s.secret.AccessToken == "") {
 		limit--
@@ -298,10 +311,22 @@ func (s executionScope) submit(ctx context.Context) domain.JobOutcome {
 	if err != nil || !domain.BelongsToSite(s.site.BaseURL, u) {
 		return s.failure(ctx, domain.ErrExecutionAuthority)
 	}
+	if err := s.repo.BeginExecutionSubmission(ctx, s.lease, c.Kind, in.URL); err != nil {
+		return s.failure(ctx, err)
+	}
 	status, err := executionsearch.New(s.client).SubmitStatus(ctx, c, s.secret, []string{in.URL})
 	if err != nil {
 		problem := executionFailure(err)
-		_ = s.repoSubmissionFailure(ctx, status, problem.Code)
+		unknown := (status == 0 && problem.Code != "execution_budget") || status == http.StatusRequestTimeout || status >= 500 ||
+			status >= 200 && status < 300
+		if unknown {
+			problem = domain.JobOutcome{Code: "execution_indexing_receipt_unknown"}
+		}
+		settlement, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.repo.ExecutionSubmissionFailure(settlement, s.lease, c.Kind, in.URL, status, problem.Code, unknown); err != nil {
+			return domain.JobOutcome{Code: "execution_indexing_receipt_unknown"}
+		}
 		return problem
 	}
 	code := "accepted"
@@ -332,15 +357,6 @@ func (s executionScope) verifyIndexNowKey(ctx context.Context) error {
 	}
 	if response.StatusCode != http.StatusOK || len(body) > 1024 || strings.TrimSpace(string(body)) != s.secret.Secret {
 		return &domain.DataError{Code: "indexnow_ownership_unverified"}
-	}
-	return nil
-}
-
-func (s executionScope) repoSubmissionFailure(ctx context.Context, status int, code string) error {
-	if reporter, ok := s.repo.(interface {
-		ExecutionSubmissionFailure(context.Context, domain.Lease, string, string, int, string) error
-	}); ok {
-		return reporter.ExecutionSubmissionFailure(ctx, s.lease, s.connection.Kind, s.work.Input.URL, status, code)
 	}
 	return nil
 }
