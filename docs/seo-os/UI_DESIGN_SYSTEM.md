@@ -105,3 +105,7 @@ A new SEO OS screen is accepted when:
 - it is responsive and accessible;
 - functional tests and available frontend checks pass;
 - rendered visual QA is documented.
+
+## 8. SEO navigation and context
+
+The [SEO information architecture](UI_INFORMATION_ARCHITECTURE.md) defines the six collapsible navigation groups, independent URL routes, compatibility routes and visibility by role. Use the original Sidebar submenus and command search for application navigation. Use a small set of links and shared selectors within one workspace to retain its site and project context. An unavailable module is labelled as planned and provides no execution controls. Use the existing table, loading, empty, error and confirmation states for both aggregate and detail pages.
