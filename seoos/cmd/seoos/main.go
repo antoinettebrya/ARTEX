@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/Autumn-27/artex/seoos/internal/api"
 	"github.com/Autumn-27/artex/seoos/internal/config"
+	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/Autumn-27/artex/seoos/internal/store"
+	"github.com/Autumn-27/artex/seoos/internal/worker"
 )
 
 func main() {
@@ -31,11 +34,20 @@ func run() error {
 		command = os.Args[1]
 	}
 	if command == "help" || command == "-h" || command == "--help" {
-		fmt.Println("Usage: seoos [serve|migrate]\nConfiguration: SEOOS_DATABASE_URL, SEOOS_ORGANIZATION_ID, SEOOS_API_TOKEN; optional SEOOS_ADDR, SEOOS_ORGANIZATION_NAME.")
+		fmt.Println("Usage: seoos [serve|migrate|provision-org NAME OWNER_EMAIL]\nConfiguration: SEOOS_DATABASE_URL, SEOOS_ORGANIZATION_ID, SEOOS_API_TOKEN; optional SEOOS_ADDR, SEOOS_ORGANIZATION_NAME.")
 		return nil
 	}
-	if len(os.Args) > 2 || (command != "serve" && command != "migrate") {
-		return errors.New("usage: seoos [serve|migrate]")
+	switch command {
+	case "serve", "migrate":
+		if len(os.Args) > 2 {
+			return errors.New("usage: seoos [serve|migrate|provision-org NAME OWNER_EMAIL]")
+		}
+	case "provision-org":
+		if len(os.Args) != 4 {
+			return errors.New("usage: seoos provision-org NAME OWNER_EMAIL")
+		}
+	default:
+		return errors.New("usage: seoos [serve|migrate|provision-org NAME OWNER_EMAIL]")
 	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -50,8 +62,22 @@ func run() error {
 		return errors.New("cannot connect to SEO PostgreSQL; check SEOOS_DATABASE_URL and database availability")
 	}
 	defer repo.Close()
+	if err := repo.SetProviderKey(cfg.ProviderKey); err != nil {
+		return errors.New("cannot initialize provider credential encryption")
+	}
 	if err := repo.Migrate(startup); err != nil {
 		return errors.New("SEO database migration failed; check the migration version, checksum and database permissions")
+	}
+	if command == "provision-org" {
+		orgID, credential, err := repo.ProvisionOrganization(startup, os.Args[2], os.Args[3])
+		if err != nil {
+			var validation *domain.ValidationError
+			if errors.As(err, &validation) {
+				return validation
+			}
+			return errors.New("cannot provision the SEO organization")
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"organization_id": orgID, "credential": credential})
 	}
 	if err := repo.EnsureOrganization(startup, cfg.OrganizationID, cfg.OrganizationName); err != nil {
 		return errors.New("cannot initialize the configured SEO organization")
@@ -73,6 +99,16 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
+	cancel()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		worker.Run(ctx, repo)
+	}()
+	defer func() {
+		stop()
+		<-workerDone
+	}()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.ListenAndServe() }()
 	slog.Info("SEO API starting", "address", cfg.Address, "organization_id", cfg.OrganizationID)

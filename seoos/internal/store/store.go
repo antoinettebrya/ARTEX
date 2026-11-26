@@ -3,12 +3,12 @@ package store
 
 import (
 	"context"
+	"crypto/cipher"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/google/uuid"
@@ -20,7 +20,8 @@ import (
 // Store owns a PostgreSQL connection pool. Every site operation requires an
 // organization ID supplied by the authenticated service, never by a request body.
 type Store struct {
-	db *sql.DB
+	db             *sql.DB
+	providerCipher cipher.AEAD
 }
 
 // Open validates the connection configuration and verifies connectivity. It does
@@ -55,14 +56,29 @@ func (s *Store) EnsureOrganization(ctx context.Context, id, name string) error {
 	if err := validateOrganizationID(id); err != nil {
 		return err
 	}
-	name = strings.TrimSpace(name)
-	if !utf8.ValidString(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 200 {
-		return &domain.ValidationError{Field: "organization_name", Message: "must contain 1 to 200 characters"}
+	name, err := domain.NormalizeOrganizationName(name)
+	if err != nil {
+		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO public.seo_organizations (id, name) VALUES ($1, $2)
 		ON CONFLICT (id) DO NOTHING`, id, name)
-	return err
+	if err != nil {
+		return err
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return err
+	} else if changed == 1 {
+		if err := audit(ctx, tx, id, "organization.create", id, map[string]string{"name": name}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 const siteColumns = `id::text, organization_id::text, name, base_url, cms,
@@ -116,12 +132,24 @@ func (s *Store) CreateSite(ctx context.Context, orgID string, input domain.SiteI
 	if err != nil {
 		return domain.Site{}, err
 	}
-	return scanSite(s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Site{}, err
+	}
+	defer tx.Rollback()
+	site, err := scanSite(tx.QueryRowContext(ctx, `
 		INSERT INTO public.seo_sites
 			(id, organization_id, name, base_url, cms, country_code, language_tag, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING `+siteColumns, uuid.NewString(), orgID, input.Name, input.BaseURL,
 		input.CMS, input.CountryCode, input.LanguageTag, input.Status))
+	if err != nil {
+		return domain.Site{}, err
+	}
+	if err := audit(ctx, tx, orgID, "site.create", site.ID, site); err != nil {
+		return domain.Site{}, err
+	}
+	return site, tx.Commit()
 }
 
 func (s *Store) GetSite(ctx context.Context, orgID, siteID string) (domain.Site, error) {
@@ -163,10 +191,8 @@ func (s *Store) ListSites(ctx context.Context, orgID string, limit, offset int) 
 	return sites, nil
 }
 
-// UpdateSite replaces editable fields only when expectedVersion still matches.
-// PostgreSQL rechecks the version predicate after concurrent updates, so at most
-// one caller can consume a given version. Both the write and existence check are
-// tenant scoped; another organization's resource is indistinguishable from absent.
+// UpdateSite locks the tenant-scoped record to capture an accurate audit snapshot
+// and checks the expected version before replacing editable fields.
 func (s *Store) UpdateSite(ctx context.Context, orgID, siteID string, expectedVersion int64, input domain.SiteInput) (domain.Site, error) {
 	if err := validateOrganizationID(orgID); err != nil {
 		return domain.Site{}, err
@@ -181,26 +207,32 @@ func (s *Store) UpdateSite(ctx context.Context, orgID, siteID string, expectedVe
 	if err != nil {
 		return domain.Site{}, err
 	}
-	site, err := scanSite(s.db.QueryRowContext(ctx, `
-		UPDATE public.seo_sites
-		SET name = $4, base_url = $5, cms = $6, country_code = $7,
-			language_tag = $8, status = $9, version = version + 1,
-			updated_at = clock_timestamp()
-		WHERE organization_id = $1 AND id = $2 AND version = $3
-		RETURNING `+siteColumns, orgID, siteID, expectedVersion, input.Name,
-		input.BaseURL, input.CMS, input.CountryCode, input.LanguageTag, input.Status))
-	if !errors.Is(err, domain.ErrNotFound) {
-		return site, err
-	}
-	var exists bool
-	err = s.db.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM public.seo_sites WHERE organization_id = $1 AND id = $2
-	)`, orgID, siteID).Scan(&exists)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.Site{}, err
 	}
-	if !exists {
-		return domain.Site{}, domain.ErrNotFound
+	defer tx.Rollback()
+	before, err := scanSite(tx.QueryRowContext(ctx, `SELECT `+siteColumns+`
+		FROM public.seo_sites WHERE organization_id = $1 AND id = $2 FOR NO KEY UPDATE`, orgID, siteID))
+	if err != nil {
+		return domain.Site{}, err
 	}
-	return domain.Site{}, domain.ErrVersionConflict
+	if before.Version != expectedVersion {
+		return domain.Site{}, domain.ErrVersionConflict
+	}
+	site, err := scanSite(tx.QueryRowContext(ctx, `
+		UPDATE public.seo_sites
+		SET name = $3, base_url = $4, cms = $5, country_code = $6,
+			language_tag = $7, status = $8, version = version + 1,
+			updated_at = clock_timestamp()
+		WHERE organization_id = $1 AND id = $2
+		RETURNING `+siteColumns, orgID, siteID, input.Name, input.BaseURL,
+		input.CMS, input.CountryCode, input.LanguageTag, input.Status))
+	if err != nil {
+		return domain.Site{}, err
+	}
+	if err := audit(ctx, tx, orgID, "site.update", siteID, map[string]domain.Site{"before": before, "after": site}); err != nil {
+		return domain.Site{}, err
+	}
+	return site, tx.Commit()
 }

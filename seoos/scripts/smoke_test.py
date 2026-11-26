@@ -40,7 +40,7 @@ def request(base, path, *, token=None, method="GET", data=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(req, timeout=5) as response:
-            return response.status, json.load(response)
+            return response.status, None if response.status == 204 else json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, json.load(error)
 
@@ -121,6 +121,34 @@ def main():
         assert code == 200 and updated["site"]["version"] == 2
         assert request(a, path, token=tokens[0], method="PUT", data=update)[0] == 409
         assert request(b, path, token=tokens[1], method="PUT", data=update)[0] == 404
+
+        cli_env = dict(os.environ, SEOOS_DATABASE_URL=dsn, SEOOS_ORGANIZATION_ID=organizations[0],
+                       SEOOS_API_TOKEN=tokens[0])
+        owner_email = str(uuid.uuid4()) + "@example.test"
+        result = subprocess.run([str(BINARY), "provision-org", "Provisioned smoke organization", owner_email],
+                                env=cli_env, text=True, capture_output=True, check=True, timeout=15)
+        provisioned = json.loads(result.stdout)
+        owner = provisioned["credential"]["token"]
+        org = provisioned["organization_id"]
+        assert org not in organizations
+        assert request(a, "/api/v1/me", token=owner)[1]["organization_id"] == org
+        assert request(a, path, token=owner)[0] == 404
+        assert request(a, "/api/v1/sites", token=owner)[0] == 200
+        code, added = request(a, "/api/v1/members", token=owner, method="POST",
+                              data={"email": "editor-" + owner_email, "role": "viewer"})
+        assert code == 201
+        member = added["member"]["user_id"]
+        viewer = added["token"]
+        assert request(a, "/api/v1/sites", token=viewer, method="POST", data=payload)[0] == 403
+        assert request(a, "/api/v1/audit", token=viewer)[0] == 403
+        member_path = "/api/v1/members/" + member
+        assert request(a, member_path + "/role", token=owner, method="PUT", data={"role": "editor"})[0] == 200
+        assert request(a, "/api/v1/sites", token=viewer, method="POST", data=payload)[0] == 201
+        assert request(a, member_path + "/token", token=owner, method="DELETE")[0] == 204
+        assert request(a, "/api/v1/me", token=viewer)[0] == 401
+        code, data = request(a, "/api/v1/audit", token=owner)
+        assert code == 200 and {item["action"] for item in data["events"]} >= {"site.create", "member.token.revoke"}
+        print("PASS: CLI organization provisioning, shared-service tenancy, role changes, credential revocation, and transactional audit")
 
         stop(process_a)
         processes.remove(process_a)

@@ -2,7 +2,7 @@ name: SEO OS CI
 
 on:
   push:
-    branches: [seo-os-v1, main]
+    branches: [seo-os-v1, "seo-os-v1/**", main]
     paths: ["seoos/**", ".github/workflows/seoos-ci.yml"]
   pull_request:
     paths: ["seoos/**", ".github/workflows/seoos-ci.yml"]
@@ -41,6 +41,11 @@ jobs:
         with:
           go-version-file: seoos/go.mod
           cache-dependency-path: seoos/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seoos/web/package-lock.json
       - name: Verify formatting and modules
         run: |
           test -z "$(gofmt -l cmd internal)"
@@ -63,5 +68,18 @@ jobs:
           go build -trimpath -o bin/seoos ./cmd/seoos
       - name: HTTP and PostgreSQL smoke test
         run: python3 scripts/smoke_test.py
+      - name: Local 160-site load test
+        run: python3 scripts/load_test.py
+      - name: Build and check dashboard
+        working-directory: seoos/web
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm ci
+          npm run build
+          npm run typecheck
+          npx playwright install --with-deps chromium
+      - name: Browser acceptance test
+        run: python3 scripts/test_dashboard.py
       - name: Build isolated container
         run: docker build --tag artex-seoos:ci .

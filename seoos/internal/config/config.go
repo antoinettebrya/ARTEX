@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"net"
 	"strconv"
@@ -16,6 +17,7 @@ type Config struct {
 	OrganizationID   string
 	OrganizationName string
 	APIToken         string
+	ProviderKey      []byte
 }
 
 // Load reads only SEO-specific settings. Legacy ARTEX credentials and database
@@ -47,6 +49,13 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if len(c.APIToken) < 32 || len(c.APIToken) > 512 || strings.ContainsFunc(c.APIToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || r > unicode.MaxASCII }) {
 		return Config{}, errors.New("SEOOS_API_TOKEN must be 32 to 512 ASCII characters without whitespace")
+	}
+	if raw := getenv("SEOOS_PROVIDER_KEY"); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			return Config{}, errors.New("SEOOS_PROVIDER_KEY must be 32 bytes encoded as standard base64")
+		}
+		c.ProviderKey = key
 	}
 	return c, nil
 }

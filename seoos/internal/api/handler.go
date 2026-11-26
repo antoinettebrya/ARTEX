@@ -27,12 +27,15 @@ const (
 
 type handler struct {
 	repo           domain.Repository
+	access         domain.AccessRepository
+	jobs           domain.JobRepository
+	providers      domain.ProviderRepository
 	organizationID string
 	tokenHash      [sha256.Size]byte
 }
 
-// NewHandler binds an API credential to one organization on the server. Request
-// headers, query parameters and JSON fields cannot select another organization.
+// NewHandler keeps the configured credential scoped to its bootstrap organization.
+// Member credentials resolve to their own organization on every API request.
 // The caller must provide TLS when exposing the service outside localhost.
 func NewHandler(repo domain.Repository, organizationID, bearerToken string) (http.Handler, error) {
 	if repo == nil {
@@ -49,7 +52,10 @@ func NewHandler(repo domain.Repository, organizationID, bearerToken string) (htt
 			return nil, errors.New("API bearer token must contain only ASCII characters without whitespace or control characters")
 		}
 	}
-	return &handler{repo: repo, organizationID: organizationID, tokenHash: sha256.Sum256([]byte(bearerToken))}, nil
+	access, _ := repo.(domain.AccessRepository)
+	jobs, _ := repo.(domain.JobRepository)
+	providers, _ := repo.(domain.ProviderRepository)
+	return &handler{repo: repo, access: access, jobs: jobs, providers: providers, organizationID: organizationID, tokenHash: sha256.Sum256([]byte(bearerToken))}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,15 +65,29 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w = headWriter{ResponseWriter: w}
 	}
 
-	if strings.HasPrefix(r.URL.Path, "/api/") && !h.authorized(r) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeError(w, http.StatusUnauthorized, "unauthorized", "A valid bearer token is required.")
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
 	defer cancel()
 	r = r.WithContext(ctx)
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		principal, err := h.authenticate(r)
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "unauthorized", "A valid bearer token is required.")
+			return
+		case err != nil:
+			writeError(w, http.StatusServiceUnavailable, "authentication_unavailable", "Authentication is temporarily unavailable.")
+			return
+		}
+		r = r.WithContext(domain.WithPrincipal(ctx, principal))
+		if h.serveAccess(w, r, principal) || h.serveRuntime(w, r, principal) {
+			return
+		}
+		if (r.URL.Path == "/api/v1/sites" || strings.HasPrefix(r.URL.Path, "/api/v1/sites/")) && (r.Method == http.MethodPost || r.Method == http.MethodPut) && !principal.Role.CanWrite() {
+			forbidden(w)
+			return
+		}
+	}
 
 	switch r.URL.Path {
 	case "/healthz":
@@ -127,34 +147,31 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) authorized(r *http.Request) bool {
+func (h *handler) authenticate(r *http.Request) (domain.Principal, error) {
 	values := r.Header.Values("Authorization")
 	if len(values) != 1 {
-		return false
+		return domain.Principal{}, domain.ErrNotFound
 	}
 	scheme, token, ok := strings.Cut(values[0], " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return false
+	if !ok || !strings.EqualFold(scheme, "Bearer") || len(token) < 32 || len(token) > 512 {
+		return domain.Principal{}, domain.ErrNotFound
 	}
-	actual := sha256.Sum256([]byte(token))
-	return subtle.ConstantTimeCompare(actual[:], h.tokenHash[:]) == 1
+	digest := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(digest[:], h.tokenHash[:]) == 1 {
+		return domain.Principal{OrganizationID: h.organizationID, Kind: "bootstrap", Role: domain.RoleOwner}, nil
+	}
+	if h.access == nil || len(token) != 68 || !strings.HasPrefix(token, "seo_") {
+		return domain.Principal{}, domain.ErrNotFound
+	}
+	return h.access.Authenticate(r.Context(), digest)
 }
 
 func (h *handler) listSites(w http.ResponseWriter, r *http.Request) {
-	if !checkQuery(w, r, "limit", "offset") {
+	limit, offset, ok := readPage(w, r)
+	if !ok {
 		return
 	}
-	limit, err := queryInt(r, "limit", 50, 1, 200)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	offset, err := queryInt(r, "offset", 0, 0, 100000)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	sites, err := h.repo.ListSites(r.Context(), h.organizationID, limit, offset)
+	sites, err := h.repo.ListSites(r.Context(), domain.PrincipalFromContext(r.Context()).OrganizationID, limit, offset)
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
@@ -170,7 +187,7 @@ func (h *handler) listSites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getSite(w http.ResponseWriter, r *http.Request, siteID string) {
-	site, err := h.repo.GetSite(r.Context(), h.organizationID, siteID)
+	site, err := h.repo.GetSite(r.Context(), domain.PrincipalFromContext(r.Context()).OrganizationID, siteID)
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
@@ -195,7 +212,7 @@ func (h *handler) createSite(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, err)
 		return
 	}
-	site, err := h.repo.CreateSite(r.Context(), h.organizationID, normalized)
+	site, err := h.repo.CreateSite(r.Context(), domain.PrincipalFromContext(r.Context()).OrganizationID, normalized)
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
@@ -221,7 +238,7 @@ func (h *handler) updateSite(w http.ResponseWriter, r *http.Request, siteID stri
 		writeRepositoryError(w, err)
 		return
 	}
-	site, err := h.repo.UpdateSite(r.Context(), h.organizationID, siteID, input.Version, normalized)
+	site, err := h.repo.UpdateSite(r.Context(), domain.PrincipalFromContext(r.Context()).OrganizationID, siteID, input.Version, normalized)
 	if err != nil {
 		writeRepositoryError(w, err)
 		return
