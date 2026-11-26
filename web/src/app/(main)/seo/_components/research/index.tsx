@@ -3,55 +3,100 @@
 import { useState } from "react";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import { Filter, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { isID, seoRequest, type Site } from "@/lib/seo/client";
+import { seoRequest } from "@/lib/seo/client";
 import { initialMarket, type Market, marketLabel, type ResearchJob } from "@/lib/seo/research";
+import { type ResearchView, seoRoutes } from "@/lib/seo/routes";
 
-import { useSeoQuery } from "../query";
+import { SiteSelector, useSeoLocation, useSiteScope } from "../context";
 import { useSeoSession } from "../session";
-import { ConfirmChange, field, Field, LoadError, PageFrame, PageSkeleton } from "../shared";
+import { ConfirmChange, FilterBar, field, LoadError, PageFrame, PageSkeleton } from "../shared";
 import { ResearchDetails } from "./details";
 import { type JobDraft, MarketDialog, ResearchJobEditor, SitePageEditor } from "./forms";
-import { type Detail, ResearchResults, type ResearchTab, researchTabs } from "./tables";
+import { type Detail, ResearchResults } from "./tables";
 
-export function Research() {
+const descriptions: Record<ResearchView, string> = {
+  seeds: "登记种子词并查看已采集的关键词建议。",
+  keywords: "比较搜索量、难度和意图。",
+  clusters: "查看关键词分组、推荐 URL 和聚类依据。",
+  serps: "查看按市场采集的自然搜索排名。",
+  competitors: "查看竞争页面的内容结构和搜索证据。",
+  intents: "查看搜索意图和推荐页面类型。",
+  mappings: "将关键词映射到本站 URL，核对页面证据。",
+  opportunities: "查看关键词机会分数及各项得分依据。",
+  jobs: "跟踪当前站点的研究任务。",
+  usage: "查看组织的 DataForSEO 请求和费用记录。",
+};
+
+function readMarketFilter(params: Pick<URLSearchParams, "get">): Market | undefined {
+  const country = params.get("country_code")?.toUpperCase();
+  const location = Number(params.get("location_code"));
+  const language = params.get("language_code");
+  const engine = params.get("search_engine");
+  const device = params.get("device");
+  if (
+    country &&
+    /^[A-Z]{2}$/.test(country) &&
+    Number.isInteger(location) &&
+    location >= 1 &&
+    location <= 100_000_000 &&
+    language &&
+    /^[A-Za-z_-]{2,20}$/.test(language) &&
+    (engine === "google" || engine === "bing") &&
+    (device === "desktop" || device === "mobile")
+  ) {
+    return {
+      country_code: country,
+      location_code: location,
+      language_code: language,
+      search_engine: engine,
+      device,
+    };
+  }
+}
+
+function marketFilterChanges(market?: Market) {
+  return {
+    country_code: market?.country_code ?? null,
+    location_code: market ? String(market.location_code) : null,
+    language_code: market?.language_code ?? null,
+    search_engine: market?.search_engine ?? null,
+    device: market?.device ?? null,
+  };
+}
+
+export function Research({ view }: { view: ResearchView }) {
+  const scope = useSiteScope();
+  return <ResearchWorkspace key={`${view}/${scope.site?.id ?? ""}`} view={view} scope={scope} />;
+}
+
+function ResearchWorkspace({ view, scope }: { view: ResearchView; scope: ReturnType<typeof useSiteScope> }) {
+  const router = useRouter();
+  const { params, href, update } = useSeoLocation();
   const { principal } = useSeoSession();
   const owner = principal.role === "owner";
   const writable = principal.role !== "viewer";
-  const sites = useSeoQuery<{ sites: Site[] }>("/sites?limit=200");
-  const fromLink = useSearchParams().get("site") ?? "";
-  const [selected, setSelected] = useState("");
-  const [market, setMarket] = useState<Market>();
-  const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<ResearchTab>("seeds");
+  const { site } = scope;
+  const market = readMarketFilter(params);
+  const search = params.get("q")?.slice(0, 400).trim() ?? "";
   const [editMarket, setEditMarket] = useState(false);
   const [addPage, setAddPage] = useState(false);
   const [job, setJob] = useState<JobDraft>();
   const [detail, setDetail] = useState<Detail>();
   const [cancel, setCancel] = useState<ResearchJob>();
   const [version, setVersion] = useState(0);
-
-  const available = sites.data?.sites ?? [];
-  const candidate = selected || (isID(fromLink) ? fromLink : "") || available[0]?.id || "";
-  const known = available.find((site) => site.id === candidate);
-  const lookup = useSeoQuery<{ site: Site }>(candidate && !known ? `/sites/${candidate}` : null);
-  const site = known ?? lookup.data?.site;
-  const siteOptions = site && !known ? [site, ...available] : available;
   const defaultMarket = market ?? (site ? initialMarket(site) : undefined);
   const canStart = writable && site?.status === "active";
-  const visible = researchTabs.filter(([id]) => owner || id !== "usage");
-  const activeTab = visible.some(([id]) => id === tab) ? tab : "seeds";
+  const marketFilters = view !== "jobs" && view !== "usage";
+  const canReadResults = view === "usage" ? owner : site !== undefined;
 
   function refresh() {
     setVersion((value) => value + 1);
@@ -59,9 +104,10 @@ export function Research() {
 
   return (
     <PageFrame
-      title="SEO 研究"
-      description="按站点与市场跟踪关键词、自然排名和页面证据。"
+      title={seoRoutes.research[view].title}
+      description={descriptions[view]}
       actions={
+        view !== "usage" &&
         canStart &&
         defaultMarket && (
           <Button size="sm" type="button" onClick={() => setJob({ kind: "keyword_discovery", market: defaultMarket })}>
@@ -70,124 +116,88 @@ export function Research() {
         )
       }
     >
-      {sites.error !== undefined && <LoadError error={sites.error} retry={sites.refresh} />}
-      {lookup.error !== undefined && <LoadError error={lookup.error} retry={lookup.refresh} />}
-      {(sites.loading || lookup.loading) && <PageSkeleton />}
-      {siteOptions.length > 0 && (
-        <Card className="py-3">
-          <CardContent className="flex flex-wrap items-end gap-3 px-3">
-            <div className="min-w-40 max-w-full flex-1 sm:max-w-72">
-              <Field id="research-site" label="研究站点">
-                <NativeSelect
-                  id="research-site"
-                  className="w-full"
-                  value={candidate}
-                  onChange={(event) => {
-                    setSelected(event.target.value);
-                    setDetail(undefined);
-                  }}
-                >
-                  {siteOptions.map((option) => (
-                    <NativeSelectOption key={option.id} value={option.id}>
-                      {option.name}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </Field>
-            </div>
-            {site && (
-              <>
-                <Badge variant="outline" className="max-w-full whitespace-normal">
-                  {market ? marketLabel(market) : "全部市场"}
-                </Badge>
-                <Button size="sm" variant="outline" type="button" onClick={() => setEditMarket(true)}>
-                  <Filter /> 筛选市场
-                </Button>
-                {market && (
-                  <Button size="sm" variant="ghost" type="button" onClick={() => setMarket(undefined)}>
-                    清除市场筛选
-                  </Button>
-                )}
-                {site.status !== "active" && (
-                  <Badge variant="outline">{site.status === "archived" ? "站点已归档" : "站点已暂停"}</Badge>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => {
-          const match = visible.find(([id]) => id === value);
-          if (match) setTab(match[0]);
-        }}
-      >
-        <div className="min-w-0 overflow-x-auto pb-1">
-          <TabsList aria-label="研究视图">
-            {visible.map(([id, label]) => (
-              <TabsTrigger key={id} value={id} className="px-3">
-                {label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-        <TabsContent value={activeTab} className="min-w-0">
-          {activeTab === "keywords" && site && (
-            <form
-              className="mb-3 flex flex-wrap items-center gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setSearch(field(new FormData(event.currentTarget), "q").trim());
-              }}
-            >
-              <Input
-                type="search"
-                name="q"
-                aria-label="筛选关键词"
-                maxLength={400}
-                className="w-52 max-w-full"
-                defaultValue={search}
-              />
-              <Button size="sm" variant="outline" type="submit">
-                <Search /> 筛选关键词
+      {view !== "usage" && scope.error !== undefined && <LoadError error={scope.error} retry={scope.refresh} />}
+      {view !== "usage" && scope.loading && <PageSkeleton />}
+      {view !== "usage" && scope.options.length > 0 && (
+        <FilterBar>
+          <SiteSelector id="research-site" label="研究站点" scope={scope} />
+          {site && marketFilters && (
+            <>
+              <Badge variant="outline" className="max-w-full whitespace-normal">
+                {market ? marketLabel(market) : "全部市场"}
+              </Badge>
+              <Button size="sm" variant="outline" type="button" onClick={() => setEditMarket(true)}>
+                <Filter /> 筛选市场
               </Button>
-            </form>
-          )}
-          {site || activeTab === "usage" ? (
-            <ResearchResults
-              key={`${activeTab}/${version}`}
-              tab={activeTab}
-              site={site?.id ?? ""}
-              market={market}
-              search={search}
-              writable={writable}
-              canStart={canStart}
-              owner={owner}
-              onDetail={setDetail}
-              onJob={(kind, keyword, selectedMarket) => setJob({ kind, keyword, market: selectedMarket })}
-              onCancel={setCancel}
-              onAddPage={() => setAddPage(true)}
-            />
-          ) : (
-            !sites.loading &&
-            !lookup.loading &&
-            !sites.error &&
-            !lookup.error && (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>请选择已登记站点</EmptyTitle>
-                </EmptyHeader>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/seo/sites">查看站点</Link>
+              {market && (
+                <Button size="sm" variant="ghost" type="button" onClick={() => update(marketFilterChanges())}>
+                  清除市场筛选
                 </Button>
-              </Empty>
-            )
+              )}
+            </>
           )}
-        </TabsContent>
-      </Tabs>
+          {site && site.status !== "active" && (
+            <Badge variant="outline">{site.status === "archived" ? "站点已归档" : "站点已暂停"}</Badge>
+          )}
+        </FilterBar>
+      )}
+      {view === "keywords" && site && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            update({ site: site.id, q: field(new FormData(event.currentTarget), "q").trim() || null });
+          }}
+        >
+          <Input
+            key={search}
+            type="search"
+            name="q"
+            aria-label="筛选关键词"
+            maxLength={400}
+            className="w-52 max-w-full"
+            defaultValue={search}
+          />
+          <Button size="sm" variant="outline" type="submit">
+            <Search /> 筛选关键词
+          </Button>
+        </form>
+      )}
+      {canReadResults ? (
+        <ResearchResults
+          key={version}
+          view={view}
+          site={site?.id ?? ""}
+          market={market}
+          search={search}
+          writable={writable}
+          canStart={canStart}
+          owner={owner}
+          onDetail={setDetail}
+          onJob={(kind, keyword, selectedMarket) => setJob({ kind, keyword, market: selectedMarket })}
+          onCancel={setCancel}
+          onAddPage={() => setAddPage(true)}
+        />
+      ) : (
+        view !== "usage" &&
+        !scope.loading &&
+        scope.error === undefined && (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>请选择已登记站点</EmptyTitle>
+            </EmptyHeader>
+            <Button asChild size="sm" variant="outline">
+              <Link href={href(seoRoutes.sites.list.path)}>查看站点</Link>
+            </Button>
+          </Empty>
+        )
+      )}
       {site && defaultMarket && editMarket && (
-        <MarketDialog market={defaultMarket} onClose={() => setEditMarket(false)} onApply={setMarket} />
+        <MarketDialog
+          market={defaultMarket}
+          onClose={() => setEditMarket(false)}
+          onApply={(nextMarket) => update({ site: site.id, ...marketFilterChanges(nextMarket) })}
+        />
       )}
       {site && canStart && job && (
         <ResearchJobEditor
@@ -196,8 +206,10 @@ export function Research() {
           owner={owner}
           onClose={() => setJob(undefined)}
           onSaved={() => {
-            setTab("jobs");
             refresh();
+            router.push(
+              href(seoRoutes.research.jobs.path, { site: site.id, ...marketFilterChanges(market), q: search || null }),
+            );
           }}
         />
       )}

@@ -19,7 +19,9 @@ import {
   researchJobLabels,
   usesDataProvider,
 } from "@/lib/seo/research";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { useSeoQuery } from "../query";
 import { Field, FormDialog, field, LoadError } from "../shared";
 
@@ -126,6 +128,7 @@ export function ResearchJobEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { href } = useSeoLocation();
   const [kind, setKind] = useState<ResearchKind>(draft.kind);
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const paid = usesDataProvider(kind);
@@ -214,7 +217,7 @@ export function ResearchJobEditor({
             <p className="text-muted-foreground text-xs">
               当前组织暂无启用的 DataForSEO Provider。
               {owner && (
-                <Link className="ml-1 underline" href="/seo/providers">
+                <Link className="ml-1 underline" href={href(seoRoutes.system.providers.path, { site: site.id })}>
                   配置 Provider
                 </Link>
               )}

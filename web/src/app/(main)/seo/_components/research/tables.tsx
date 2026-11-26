@@ -17,29 +17,16 @@ import type {
   ProviderUsage,
   ResearchJob,
   ResearchKind,
-  Seed,
   SERP,
+  Seed,
   SitePage,
   Suggestion,
 } from "@/lib/seo/research";
 import { marketLabel, marketQuery, researchJobLabels, usd } from "@/lib/seo/research";
+import { type ResearchView, seoRoutes } from "@/lib/seo/routes";
 
 import { formatTime, RecordsTable, StateBadge, useSeoRecords } from "../shared";
 
-export const researchTabs = [
-  ["seeds", "研究概览"],
-  ["keywords", "关键词探索"],
-  ["clusters", "关键词聚类"],
-  ["serps", "SERP 分析"],
-  ["competitors", "竞争页面"],
-  ["intents", "搜索意图"],
-  ["mappings", "Keyword-to-URL"],
-  ["opportunities", "机会评分"],
-  ["jobs", "研究历史"],
-  ["usage", "Provider 用量"],
-] as const;
-
-export type ResearchTab = (typeof researchTabs)[number][0];
 export type Detail =
   | { kind: "serp"; row: SERP }
   | { kind: "competitor"; row: Competitor }
@@ -216,7 +203,7 @@ function keyed(row: {
   return `${row.id ?? row.keyword ?? ""}/${marketLabel(row.market)}/${row.collected_at ?? ""}/${row.source ?? ""}`;
 }
 
-function researchPath(section: ResearchTab | "pages" | "suggestions", site: string, market?: Market, query?: string) {
+function researchPath(section: ResearchView | "pages" | "suggestions", site: string, market?: Market, query?: string) {
   if (section === "usage") return "/research/usage";
   const params = new URLSearchParams({ site_id: site });
   if (market && section !== "jobs") marketQuery(params, market);
@@ -225,7 +212,7 @@ function researchPath(section: ResearchTab | "pages" | "suggestions", site: stri
 }
 
 export function ResearchResults({
-  tab,
+  view,
   site,
   market,
   search,
@@ -237,7 +224,7 @@ export function ResearchResults({
   onCancel,
   onAddPage,
 }: {
-  tab: ResearchTab;
+  view: ResearchView;
   site: string;
   market?: Market;
   search?: string;
@@ -249,15 +236,15 @@ export function ResearchResults({
   onCancel: (job: ResearchJob) => void;
   onAddPage: () => void;
 }) {
-  const path = researchPath(tab, site, market, search);
-  const title = researchTabs.find(([id]) => id === tab)?.[1] ?? "SEO 研究";
+  const path = researchPath(view, site, market, search);
+  const title = view === "seeds" ? "种子关键词" : seoRoutes.research[view].title;
 
   function dataSource(row: { snapshot_id?: string | null }) {
     const id = row.snapshot_id;
     return owner && id ? action("原始响应", () => onDetail({ kind: "snapshot", id })) : null;
   }
 
-  switch (tab) {
+  switch (view) {
     case "seeds":
       return (
         <div className="space-y-6">

@@ -17,7 +17,15 @@ async function signIn(page: Page, token: string) {
   await page.goto("/seo/login");
   await page.getByLabel("访问凭据", { exact: true }).fill(token);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("table", { name: "已登记站点" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运营总览", level: 1 })).toBeVisible();
+}
+
+async function openNavigation(page: Page, group: string, name: string) {
+  const target = page.getByRole("link", { name, exact: true });
+  if (!(await target.isVisible())) {
+    await page.getByRole("button", { name: group, exact: true }).click();
+  }
+  await target.click();
 }
 
 async function market(dialog: Locator, device = "desktop") {
@@ -37,7 +45,7 @@ async function screenshot(page: Page, filename: string) {
 }
 
 test("keyword research uses the ARTEX shell and persists actual worker results", async ({ page, request, browser }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
   const token = process.env.SEOOS_E2E_TOKEN;
   const api = process.env.SEOOS_API_ORIGIN;
   if (!token || !api) throw new Error("Run the SEO E2E driver with an isolated PostgreSQL database");
@@ -45,9 +53,10 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
-  async function tab(name: string) {
-    await page.getByRole("tab", { name, exact: true }).click();
-    return page.getByRole("table", { name, exact: true });
+  async function view(name: string, table = name) {
+    await openNavigation(page, "Research", name);
+    await expect(page.getByRole("heading", { name, level: 1, exact: true })).toBeVisible();
+    return page.getByRole("table", { name: table, exact: true });
   }
 
   async function createTask(
@@ -85,11 +94,12 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
       )
       .toMatch(/^(succeeded|failed|cancelled)$/);
     expect(completed?.state, completed?.error_code).toBe("succeeded");
-    await expect(page.getByRole("tab", { name: "研究历史" })).toHaveAttribute("aria-selected", "true");
+    await expect(page).toHaveURL((url) => url.pathname === "/seo/research/history" && url.searchParams.has("site"));
     return completed;
   }
 
   await signIn(page, token);
+  await openNavigation(page, "Sites", "全部站点");
   await page.getByRole("button", { name: "添加站点" }).click();
   const site = page.getByRole("dialog", { name: "添加站点" });
   await site.getByLabel("站点名称").fill(siteName);
@@ -99,7 +109,7 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await site.getByRole("button", { name: "保存站点" }).click();
   await expect(page.getByRole("link", { name: siteName, exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "Provider", exact: true }).click();
+  await openNavigation(page, "AI & System", "AI Provider");
   await page.getByRole("tab", { name: "DataForSEO 数据源" }).click();
   await page.getByRole("button", { name: "添加DataForSEO" }).click();
   const provider = page.getByRole("dialog", { name: "添加DataForSEO" });
@@ -117,19 +127,24 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await expect(providerRecord.getByRole("status")).toHaveText(/连接成功（\d+ ms）/);
   await screenshot(page, "phase2-dataforseo-provider.png");
 
-  await page.getByRole("link", { name: "SEO 研究", exact: true }).click();
+  await openNavigation(page, "Research", "关键词研究");
   await page.getByLabel("研究站点").selectOption({ label: siteName });
   const siteID = await page.getByLabel("研究站点").inputValue();
   await createTask("keyword_discovery", true);
   const suggestions = await createTask("keyword_suggestions", true);
   expect(suggestions?.result?.cache_hits).toBe(1);
   await createTask("keyword_metrics", true);
-  await expect(await tab("研究概览")).toContainText(keyword);
+  await expect(await view("关键词研究", "种子关键词")).toContainText(keyword);
   await expect(page.getByRole("table", { name: "关键词建议" })).toContainText(related);
   await screenshot(page, "phase2-research-dashboard.png");
-  const explorer = await tab("关键词探索");
+  const explorer = await view("关键词探索");
   await page.getByRole("searchbox", { name: "筛选关键词" }).fill(keyword);
   await page.getByRole("button", { name: "筛选关键词", exact: true }).click();
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/seo/research/keywords" && url.searchParams.get("q") === keyword,
+  );
+  await page.reload();
+  await expect(page.getByRole("searchbox", { name: "筛选关键词" })).toHaveValue(keyword);
   const measured = explorer
     .getByRole("row")
     .filter({ has: page.getByText(keyword, { exact: true }) })
@@ -148,8 +163,35 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await createTask("serp_analysis", true);
   await createTask("serp_analysis", true, { device: "mobile" });
   await createTask("serp_analysis", true, { term: related });
-  const serp = await tab("SERP 分析");
+  const serp = await view("SERP 竞品分析");
   await expect(serp.getByRole("row").filter({ hasText: "移动" })).toContainText(keyword);
+  await page.getByRole("button", { name: "筛选市场", exact: true }).click();
+  const filter = page.getByRole("dialog", { name: "筛选市场" });
+  await market(filter, "mobile");
+  await filter.getByRole("button", { name: "应用筛选" }).click();
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/seo/research/serp" && url.searchParams.get("device") === "mobile",
+  );
+  await expect(serp.getByRole("row").filter({ hasText: "移动" })).toContainText(keyword);
+  await expect(serp.getByRole("row").filter({ hasText: "桌面" })).toHaveCount(0);
+  await view("关键词探索");
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === "/seo/research/keywords" &&
+      url.searchParams.get("site") === siteID &&
+      url.searchParams.get("device") === "mobile" &&
+      url.searchParams.get("q") === keyword,
+  );
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "SERP 竞品分析", level: 1 })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole("searchbox", { name: "筛选关键词" })).toHaveValue(keyword);
+  await page.goBack();
+  await page.reload();
+  await expect(serp.getByRole("row").filter({ hasText: "移动" })).toContainText(keyword);
+  await expect(serp.getByRole("row").filter({ hasText: "桌面" })).toHaveCount(0);
+  await page.getByRole("button", { name: "清除市场筛选", exact: true }).click();
+  await expect(serp.getByRole("row").filter({ hasText: "桌面" }).first()).toBeVisible();
   await serp
     .getByRole("row")
     .filter({ has: page.getByText(keyword, { exact: true }) })
@@ -170,7 +212,7 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await expect(competitorTask.getByLabel("已观测 SERP URL")).toHaveValue(competitorPage);
   await competitorTask.getByLabel("DataForSEO Provider").selectOption({ label: providerName });
   await submit(competitorTask);
-  const competitor = await tab("竞争页面");
+  const competitor = await view("竞争页面");
   await expect(competitor).toContainText(competitorPage);
   await competitor.getByRole("button", { name: "查看页面证据" }).click();
   const analyzed = page.getByRole("dialog", { name: "Robot vacuum reviews" });
@@ -187,9 +229,9 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await analyzed.getByRole("button", { name: "关闭", exact: true }).click();
 
   await createTask("keyword_intent", false);
-  await expect(await tab("搜索意图")).toContainText(keyword);
+  await expect(await view("搜索意图")).toContainText(keyword);
   await createTask("keyword_clustering", false);
-  const clusters = await tab("关键词聚类");
+  const clusters = await view("关键词聚类");
   await clusters
     .getByRole("row")
     .filter({ has: page.getByText(keyword, { exact: true }) })
@@ -199,7 +241,7 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await expect(clusterDetails).toContainText(related);
   await clusterDetails.getByRole("button", { name: "关闭", exact: true }).click();
 
-  await tab("Keyword-to-URL");
+  await view("Keyword-to-URL");
   await page.getByRole("button", { name: "登记本站页面" }).click();
   const evidence = page.getByRole("dialog", { name: "登记本站页面" });
   await evidence.getByLabel("页面 URL", { exact: true }).fill(ownPage);
@@ -210,13 +252,13 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await evidence.getByRole("button", { name: "保存页面证据" }).click();
   await expect(page.getByRole("table", { name: "本站页面证据" })).toContainText(ownPage);
   await createTask("keyword_url_mapping", false);
-  const mapped = await tab("Keyword-to-URL");
+  const mapped = await view("Keyword-to-URL");
   await expect(mapped).toContainText(ownPage);
   await createTask("keyword_url_mapping", false);
   const savedMappings = await request.get(`${api}/api/v1/research/mappings?site_id=${siteID}`, { headers: auth });
   const { items: mappings } = await savedMappings.json();
   expect(mappings[0]?.mapping?.previous_target_url).toBe(ownPage);
-  await tab("Keyword-to-URL");
+  await view("Keyword-to-URL");
   await screenshot(page, "phase2-keyword-mapping.png");
 
   await createTask("opportunity_scoring", false, { value: "8" });
@@ -224,12 +266,12 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await expect(
     page.getByRole("table", { name: "研究历史" }).getByRole("row").filter({ hasText: "机会评分" }),
   ).toContainText("完成");
-  const scoring = await tab("机会评分");
+  const scoring = await view("关键词机会");
   await expect(scoring).toContainText(keyword);
   await scoring.getByRole("button", { name: "评分依据" }).click();
   await expect(page.getByRole("table", { name: "机会评分分项" }).locator("tbody tr")).toHaveCount(6);
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(await tab("Provider 用量")).toContainText(providerName);
+  await expect(await view("数据用量")).toContainText(providerName);
 
   const createdMember = await request.post(`${api}/api/v1/members`, {
     headers: auth,
@@ -241,13 +283,15 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   try {
     await signIn(viewer, viewerToken);
     await viewer.goto(`/seo/research?site=${siteID}`);
-    await expect(viewer.getByRole("heading", { name: "SEO 研究" })).toBeVisible();
+    await expect(viewer.getByRole("heading", { name: "关键词研究", level: 1 })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "创建研究任务" })).toHaveCount(0);
-    await expect(viewer.getByRole("tab", { name: "Provider 用量" })).toHaveCount(0);
-    await viewer.getByRole("tab", { name: "关键词探索" }).click();
+    await expect(viewer.getByRole("link", { name: "数据用量", exact: true })).toHaveCount(0);
+    await openNavigation(viewer, "Research", "关键词探索");
     const viewerKeywords = viewer.getByRole("table", { name: "关键词探索" });
     await expect(viewerKeywords).toContainText(keyword);
     await expect(viewerKeywords.getByRole("button", { name: "原始响应" })).toHaveCount(0);
+    await viewer.goto(`/seo/research/usage?site=${siteID}`);
+    await expect(viewer.getByText("数据用量需要所有者权限", { exact: true })).toBeVisible();
   } finally {
     await viewer.close();
   }
@@ -255,7 +299,9 @@ test("keyword research uses the ARTEX shell and persists actual worker results",
   await page.getByRole("button", { name: /^Current theme: light/ }).click();
   await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   await page.setViewportSize({ width: 390, height: 844 });
-  await tab("关键词探索");
+  await page.getByRole("button", { name: "Toggle Sidebar", exact: true }).click();
+  await view("关键词探索");
+  await expect(page.getByRole("table", { name: "关键词探索" })).toContainText(keyword);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await screenshot(page, "phase2-research-mobile-dark.png");
   expect(pageErrors).toEqual([]);
