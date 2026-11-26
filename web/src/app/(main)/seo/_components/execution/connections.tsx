@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useRouter } from "next/navigation";
 
@@ -21,54 +21,74 @@ import {
   isCMS,
   isGoogle,
 } from "@/lib/seo/execution";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { Field, FormDialog, field, formatTime, RecordsTable, StateBadge } from "../shared";
 import { useExecutionRecords } from "./records";
 import type { TaskSelection } from "./tasks";
 
 const oauthSession = "artex.execution.oauth";
-type GoogleSession = { state: string; site_id: string; connection_id: string };
+const googleCallbackPath = "/seo/execution";
+type GoogleSession = { state: string; site_id: string; connection_id: string; project?: string };
 
-export function useGoogleReturn(owner: boolean, onComplete: () => void) {
+export function useGoogleReturn(owner: boolean) {
   const router = useRouter();
+  const { params, href } = useSeoLocation();
+  const state = params.get("state");
+  const code = params.get("code");
+  const authError = params.get("error");
+  const returnTo = href(seoRoutes.sites.connections.path);
+  const handled = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!owner) return;
-    const current = new URL(window.location.href);
-    const state = current.searchParams.get("state");
-    const code = current.searchParams.get("code");
-    const authError = current.searchParams.get("error");
-    if (!state || (!code && !authError)) return;
+    if (!owner || !state || (!code && !authError) || handled.current === state) return;
+    handled.current = state;
 
     let pending: GoogleSession | undefined;
     try {
       pending = JSON.parse(sessionStorage.getItem(oauthSession) ?? "null") ?? undefined;
     } catch {
-      sessionStorage.removeItem(oauthSession);
+      // An expired or unavailable browser session cannot complete authorization.
     }
-    if (!pending || pending.state !== state || !isID(pending.site_id) || !isID(pending.connection_id)) return;
-    sessionStorage.removeItem(oauthSession);
-
-    const clean = new URL("/seo/execution", current);
-    clean.searchParams.set("site", pending.site_id);
-    router.replace(`${clean.pathname}${clean.search}`, { scroll: false });
-    if (authError || !code) {
-      toast.error("Google 授权已取消或未完成。");
+    if (!pending || pending.state !== state || !isID(pending.site_id) || !isID(pending.connection_id)) {
+      toast.error("Google 授权会话已失效，请重新授权。");
+      router.replace(returnTo, { scroll: false });
       return;
     }
-    seoRequest<{ connected: boolean }>("/execution/oauth/exchange", {
+    sessionStorage.removeItem(oauthSession);
+
+    const clean = new URL(seoRoutes.sites.connections.path, window.location.origin);
+    clean.searchParams.set("site", pending.site_id);
+    if (pending.project && isID(pending.project)) clean.searchParams.set("project", pending.project);
+    function finish() {
+      if (new URLSearchParams(window.location.search).get("state") === state) {
+        router.replace(`${clean.pathname}${clean.search}`, { scroll: false });
+      }
+    }
+
+    if (authError || !code) {
+      toast.error("Google 授权已取消或未完成。");
+      finish();
+      return;
+    }
+    const { site_id, connection_id } = pending;
+    void seoRequest<{ connected: boolean }>("/execution/oauth/exchange", {
       method: "POST",
-      body: { ...pending, code },
+      body: { site_id, connection_id, state, code },
     })
       .then((result) => {
         if (!result.connected) throw new SeoAPIError(400, "execution_oauth_response");
-        onComplete();
         toast.success("Google 账号已授权");
       })
-      .catch((error: unknown) => toast.error(errorMessage(error)));
-  }, [owner, onComplete, router]);
+      .catch((error: unknown) => toast.error(errorMessage(error)))
+      .finally(finish);
+  }, [authError, code, owner, returnTo, router, state]);
+
+  return owner && !!state && !!(code || authError);
 }
 
-async function startGoogle(connection: Connection) {
+async function startGoogle(connection: Connection, project: string | undefined) {
   const { authorization_url, state } = await seoRequest<{ authorization_url: string; state: string }>(
     "/execution/oauth/start",
     { method: "POST", body: { site_id: connection.site_id, connection_id: connection.id } },
@@ -82,7 +102,7 @@ async function startGoogle(connection: Connection) {
   ) {
     throw new SeoAPIError(400, "execution_oauth_response");
   }
-  const pending: GoogleSession = { site_id: connection.site_id, connection_id: connection.id, state };
+  const pending: GoogleSession = { site_id: connection.site_id, connection_id: connection.id, state, project };
   sessionStorage.setItem(oauthSession, JSON.stringify(pending));
   window.location.assign(url.href);
 }
@@ -138,7 +158,7 @@ function ConnectionEditor({
     wordpress: "WordPress 应用程序密码",
     generic: "CMS 访问令牌",
   };
-  const defaultReturn = typeof window === "undefined" ? "" : new URL("/seo/execution", window.location.origin).href;
+  const defaultReturn = typeof window === "undefined" ? "" : new URL(googleCallbackPath, window.location.origin).href;
 
   return (
     <FormDialog
@@ -406,13 +426,14 @@ export function ConnectionsPanel({
 }) {
   const [editor, setEditor] = useState<"new" | Connection>();
   const [authorizing, setAuthorizing] = useState<string>();
+  const { projectID, siteID } = useSeoLocation();
   const records = useExecutionRecords<Connection>("connections", site.id, revision);
   const { refresh } = records;
 
   async function authorize(connection: Connection) {
     setAuthorizing(connection.id);
     try {
-      await startGoogle(connection);
+      await startGoogle(connection, siteID === connection.site_id ? (projectID ?? undefined) : undefined);
     } catch (error) {
       toast.error(errorMessage(error));
       setAuthorizing(undefined);

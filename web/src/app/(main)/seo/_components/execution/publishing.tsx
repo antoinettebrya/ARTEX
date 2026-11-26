@@ -85,9 +85,10 @@ function ReleaseEditor({
   onSaved: () => void;
 }) {
   const [key] = useState(() => crypto.randomUUID());
-  const [selected, setSelected] = useState(
-    packages.find((entry) => entry.id === requestedPackage)?.id ?? packages[0]?.id ?? "",
-  );
+  const [selected, setSelected] = useState(() => {
+    if (!requestedPackage) return packages[0]?.id ?? "";
+    return packages.some((entry) => entry.id === requestedPackage) ? requestedPackage : "";
+  });
   const source = packages.find((entry) => entry.id === selected);
 
   return (
@@ -122,6 +123,11 @@ function ReleaseEditor({
             required
             onChange={(event) => setSelected(event.target.value)}
           >
+            {!selected && (
+              <NativeSelectOption value="" disabled>
+                请选择发布包
+              </NativeSelectOption>
+            )}
             {packages.map((entry) => (
               <NativeSelectOption key={entry.id} value={entry.id}>
                 {entry.article.title} · 第 {entry.version} 版
@@ -264,7 +270,7 @@ export function PublishingPanel({
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">发布中心</h2>
+        <h2 className="font-semibold">CMS 发布记录</h2>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"

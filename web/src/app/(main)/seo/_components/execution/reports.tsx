@@ -27,14 +27,15 @@ import {
   type OptimizationFeedback,
   type SitemapRecord,
 } from "@/lib/seo/execution";
+import { seoRoutes } from "@/lib/seo/routes";
 
-import { Field, formatTime, RecordDetails, RecordsTable, StateBadge } from "../shared";
+import { Field, FilterBar, formatTime, RecordDetails, RecordsTable, StateBadge } from "../shared";
 import { WebAddress } from "./publishing";
 import { useExecutionRecords } from "./records";
 import { SitemapDetails } from "./sitemap";
 import { ConnectionSelect, type TaskSelection } from "./tasks";
 
-type PanelScope = {
+export type PanelScope = {
   site: Site;
   connections: Connection[];
   writable: boolean;
@@ -340,73 +341,38 @@ export function CMSContentPanel({ site, connections, owner, writable, onTask, re
   );
 }
 
-export function IndexPanel({ site, connections, owner, writable, onTask, revision }: PanelScope) {
+export function IndexPanel({ site, connections, writable, onTask, revision }: PanelScope) {
   const inspectors = connections.filter(
     (item) => item.enabled && item.configured && (item.kind === "gsc" || item.kind === "bing"),
   );
-  const submitters = connections.filter(
-    (item) =>
-      item.enabled && item.configured && item.allow_writes && (item.kind === "indexnow" || item.kind === "bing"),
-  );
   const inspect = useSelectedConnection(inspectors);
-  const submit = useSelectedConnection(submitters);
   const list = useExecutionRecords<IndexRecord>("index", site.id, revision);
-  const submissions = useExecutionRecords<IndexSubmission>("submissions", site.id, revision);
   return (
     <div className="grid gap-3">
       <PanelTitle title="索引记录">
-        <Reload
-          reload={() => {
-            list.refresh();
-            submissions.refresh();
-          }}
-          disabled={list.refreshing || submissions.refreshing}
-        >
+        <Reload reload={list.refresh} disabled={list.refreshing}>
           刷新记录
         </Reload>
       </PanelTitle>
       {writable && (
-        <Card className="py-3">
-          <CardContent className="flex flex-wrap gap-4 px-3">
-            <div className="flex min-w-0 flex-wrap items-end gap-2">
-              <ConnectionSelect
-                id="execution-inspection-connection"
-                label="URL 检查连接"
-                connections={inspectors}
-                value={inspect.connection?.id ?? ""}
-                onChange={inspect.setSelected}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!inspect.connection}
-                onClick={() => onTask({ kind: "url_inspection", connection: inspect.connection })}
-              >
-                <Search /> 检查 URL
-              </Button>
-            </div>
-            {owner && (
-              <div className="flex min-w-0 flex-wrap items-end gap-2">
-                <ConnectionSelect
-                  id="execution-indexnow-connection"
-                  label="提交连接"
-                  connections={submitters}
-                  value={submit.connection?.id ?? ""}
-                  onChange={submit.setSelected}
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!submit.connection}
-                  onClick={() => onTask({ kind: "indexnow_submit", connection: submit.connection })}
-                >
-                  <Send /> 提交索引请求
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <FilterBar>
+          <ConnectionSelect
+            id="execution-inspection-connection"
+            label="URL 检查连接"
+            connections={inspectors}
+            value={inspect.connection?.id ?? ""}
+            onChange={inspect.setSelected}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!inspect.connection}
+            onClick={() => onTask({ kind: "url_inspection", connection: inspect.connection })}
+          >
+            <Search /> 检查 URL
+          </Button>
+        </FilterBar>
       )}
       <RecordsTable
         label="索引状态"
@@ -434,6 +400,43 @@ export function IndexPanel({ site, connections, owner, writable, onTask, revisio
           </TableRow>
         ))}
       </RecordsTable>
+    </div>
+  );
+}
+
+export function IndexSubmissionPanel({ site, connections, owner, writable, onTask, revision }: PanelScope) {
+  const submitters = connections.filter(
+    (item) =>
+      item.enabled && item.configured && item.allow_writes && (item.kind === "indexnow" || item.kind === "bing"),
+  );
+  const submit = useSelectedConnection(submitters);
+  const submissions = useExecutionRecords<IndexSubmission>("submissions", site.id, revision);
+  return (
+    <div className="grid gap-3">
+      <PanelTitle title="提交记录">
+        <Reload reload={submissions.refresh} disabled={submissions.refreshing}>
+          刷新记录
+        </Reload>
+      </PanelTitle>
+      {owner && writable && (
+        <FilterBar>
+          <ConnectionSelect
+            id="execution-indexnow-connection"
+            label="提交连接"
+            connections={submitters}
+            value={submit.connection?.id ?? ""}
+            onChange={submit.setSelected}
+          />
+          <Button
+            type="button"
+            size="sm"
+            disabled={!submit.connection}
+            onClick={() => onTask({ kind: "indexnow_submit", connection: submit.connection })}
+          >
+            <Send /> 提交索引请求
+          </Button>
+        </FilterBar>
+      )}
       <RecordsTable
         label="索引提交记录"
         columns={["URL", "平台", "提交结果", "HTTP 状态", "提交时间（UTC）"]}
@@ -441,11 +444,15 @@ export function IndexPanel({ site, connections, owner, writable, onTask, revisio
         list={submissions}
       >
         {submissions.records.map((item) => (
-          <TableRow key={item.job_id}>
+          <TableRow key={`${item.job_id}/${item.provider}/${item.url}`}>
             <TableCell className="max-w-64 whitespace-normal px-3">
               <WebAddress url={item.url} />
             </TableCell>
-            <TableCell className="px-3">{item.provider}</TableCell>
+            <TableCell className="px-3">
+              {item.provider === "indexnow" || item.provider === "bing"
+                ? connectionLabels[item.provider]
+                : item.provider}
+            </TableCell>
             <TableCell className="max-w-52 whitespace-normal break-words px-3">
               <StateBadge
                 label={
@@ -576,7 +583,7 @@ export function FeedbackPanel({ site, revision }: { site: Site; revision: number
   const list = useExecutionRecords<OptimizationFeedback>("feedback", site.id, revision);
   return (
     <div className="grid gap-3">
-      <PanelTitle title="优化反馈">
+      <PanelTitle title="优化观测记录">
         <Reload reload={list.refresh} disabled={list.refreshing}>
           刷新反馈
         </Reload>
@@ -611,7 +618,7 @@ export function FeedbackPanel({ site, revision }: { site: Site; revision: number
             </TableCell>
             <TableCell className="px-3">
               <Button asChild size="sm" variant="ghost">
-                <Link href={`/seo/content?site=${site.id}&project=${item.project_id}&view=refresh`}>
+                <Link href={`${seoRoutes.content.refresh.path}?site=${site.id}&project=${item.project_id}`}>
                   查看更新建议 <ArrowRight />
                 </Link>
               </Button>
@@ -637,7 +644,7 @@ export function UsagePanel({ site, revision }: { site: Site; revision: number })
   const list = useExecutionRecords<Usage>("usage", site.id, revision);
   return (
     <div className="grid gap-3">
-      <PanelTitle title="执行用量">
+      <PanelTitle title="连接与采集额度">
         <Reload reload={list.refresh} disabled={list.refreshing}>
           刷新用量
         </Reload>

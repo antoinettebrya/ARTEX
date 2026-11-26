@@ -38,7 +38,7 @@ export async function runExecutionFlow({
   packageID: string;
 }) {
   const title = "Phase 4 通用 CMS 验收";
-  const tabs = (name: string) => page.getByRole("tab", { name, exact: true }).click();
+  const open = (path: string) => page.goto(`${path}?site=${siteID}`);
 
   async function awaitJob(id: string, name: string, expected = "succeeded") {
     let final: { state: string; error_code?: string; result?: { verification_job_id?: string } } | undefined;
@@ -70,10 +70,10 @@ export async function runExecutionFlow({
     return { id: body.job.id, input: submitted.request().postDataJSON(), result };
   }
 
-  await page.getByRole("link", { name: "站点执行", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "站点执行", exact: true })).toBeVisible();
-  await page.getByLabel("执行站点", { exact: true }).selectOption(siteID);
-  async function createConnection(kind: "generic" | "gsc", name: string, fields: Record<string, string>) {
+  await open("/seo/sites/connections");
+  await expect(page.getByRole("heading", { name: "CMS 连接", exact: true })).toBeVisible();
+  await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+  async function createConnection(kind: "generic" | "gsc" | "indexnow", name: string, fields: Record<string, string>) {
     await page.getByRole("button", { name: "新建连接", exact: true }).click();
     const editor = page.getByRole("dialog", { name: "新建连接", exact: true });
     await editor.getByLabel("连接类型", { exact: true }).selectOption(kind);
@@ -82,8 +82,13 @@ export async function runExecutionFlow({
       await editor.getByLabel(label, { exact: true }).fill(value);
     }
     await editor.getByRole("switch", { name: "启用连接", exact: true }).click();
-    if (kind === "generic") {
-      await editor.getByRole("switch", { name: "授权此连接写入站点", exact: true }).click();
+    if (kind === "generic" || kind === "indexnow") {
+      await editor
+        .getByRole("switch", {
+          name: kind === "generic" ? "授权此连接写入站点" : "授权此连接提交索引请求",
+          exact: true,
+        })
+        .click();
     }
     const connect = page.waitForResponse(
       (res) => new URL(res.url()).pathname === "/seo/api/execution/connections" && res.request().method() === "POST",
@@ -107,10 +112,17 @@ export async function runExecutionFlow({
   await expect(connectionRow).toContainText("草稿写入");
   await executionScreenshot(page, "phase4-cms-connection.png");
 
-  await tabs("发布中心");
+  await page.goto(`/seo/execution?site=${siteID}&package=${packageID}`);
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === "/seo/execution/publishing" &&
+      url.searchParams.get("site") === siteID &&
+      url.searchParams.get("package") === packageID,
+  );
+  await page.reload();
   await page.getByRole("button", { name: "创建发布记录", exact: true }).click();
   const release = page.getByRole("dialog", { name: "创建发布记录", exact: true });
-  await release.getByLabel("已批准的发布包", { exact: true }).selectOption(packageID);
+  await expect(release.getByLabel("已批准的发布包", { exact: true })).toHaveValue(packageID);
   await release.getByLabel("目标 CMS", { exact: true }).selectOption(connection.id);
   await release.getByLabel("内容类型", { exact: true }).selectOption("page");
   const creation = page.waitForResponse(
@@ -190,7 +202,7 @@ export async function runExecutionFlow({
   await submitTask("恢复发布前版本", "确认恢复", "恢复本地验收前的 CMS 内容状态。");
   await expect(record).toContainText("已恢复");
 
-  await tabs("内容及媒体");
+  await open("/seo/execution/cms");
   await page.getByRole("button", { name: "同步 CMS 内容", exact: true }).click();
   await submitTask("同步 CMS 内容及媒体");
   const pages = page.getByRole("table", { name: "CMS 页面与文章", exact: true });
@@ -206,7 +218,7 @@ export async function runExecutionFlow({
   await submitTask("上传 CMS 媒体");
   await expect(page.getByRole("table", { name: "CMS 媒体库", exact: true })).toContainText("phase4-media-fixture.gif");
 
-  await tabs("Sitemap");
+  await open("/seo/execution/sitemap");
   await page.getByRole("button", { name: "刷新 Sitemap", exact: true }).click();
   const sitemapTask = page.getByRole("dialog", { name: "刷新 Sitemap", exact: true });
   await sitemapTask.getByLabel("Sitemap 地址（可选）", { exact: true }).fill(`${siteURL}/sitemap.xml`);
@@ -229,13 +241,40 @@ export async function runExecutionFlow({
   expect(await readFile(localXML, "utf8")).toContain(`<loc>${siteURL}/existing</loc>`);
   await executionScreenshot(page, "phase4-sitemap.png");
   await sitemap.getByRole("button", { name: "关闭", exact: true }).click();
-  await tabs("索引与 URL 检查");
+  await open("/seo/execution/indexing");
   const index = page.getByRole("table", { name: "索引状态", exact: true });
   await expect(index.getByRole("row").filter({ hasText: `${siteURL}/existing` })).toContainText("已发现");
-  await expect(page.getByRole("table", { name: "索引提交记录", exact: true })).toBeVisible();
+  await expect(page.getByRole("table", { name: "索引提交记录", exact: true })).toHaveCount(0);
   await executionScreenshot(page, "phase4-indexing.png");
 
-  await tabs("CMS 连接");
+  await open("/seo/sites/connections");
+  const indexNowKey = "phase4-indexnow-key";
+  const indexNow = await createConnection("indexnow", "Phase 4 IndexNow 验收", {
+    "IndexNow 密钥文件地址": `${siteURL}/${indexNowKey}.txt`,
+    "API 密钥": indexNowKey,
+  });
+  await open("/seo/execution/indexnow");
+  await expect(page.getByRole("heading", { name: "IndexNow", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "检查 URL", exact: true })).toHaveCount(0);
+  await page.getByLabel("提交连接", { exact: true }).selectOption(indexNow.id);
+  await page.getByRole("button", { name: "提交索引请求", exact: true }).click();
+  const submission = page.getByRole("dialog", { name: "提交索引请求", exact: true });
+  await submission.getByLabel("目标 URL", { exact: true }).fill(`${siteURL}/existing`);
+  await submission.getByLabel("提交说明", { exact: true }).fill("验证本地 IndexNow 合同与平台回执。");
+  await submitTask("提交索引请求");
+  await page.reload();
+  const receipt = page
+    .getByRole("table", { name: "索引提交记录", exact: true })
+    .getByRole("row")
+    .filter({
+      hasText: `${siteURL}/existing`,
+    });
+  await expect(receipt).toContainText("IndexNow");
+  await expect(receipt).toContainText("等待密钥验证");
+  await expect(receipt).toContainText("202");
+  await executionScreenshot(page, "phase4-indexnow.png");
+
+  await open("/seo/sites/connections");
   const searchConnection = "Phase 4 Search Console 验收";
   const configuredCallback = "https://artex-fixture.example.test/seo/execution";
   await createConnection("gsc", searchConnection, {
@@ -281,10 +320,10 @@ export async function runExecutionFlow({
     .getByRole("button", { name: "授权 Google", exact: true })
     .click();
   expect((await exchanged).ok(), "exchange approved fixture Google authorization").toBe(true);
-  await expect(page).toHaveURL((url) => url.pathname === "/seo/execution" && url.search === `?site=${siteID}`);
+  await expect(page).toHaveURL((url) => url.pathname === "/seo/sites/connections" && url.search === `?site=${siteID}`);
   await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
 
-  await tabs("Search Console");
+  await open("/seo/execution/analytics");
   await page.getByRole("button", { name: "同步报告", exact: true }).click({ timeout: 10000 });
   const reportDay = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
   const gscReport = page.getByRole("dialog", { name: "同步 Search Console", exact: true });
@@ -302,22 +341,36 @@ export async function runExecutionFlow({
   await expect(metrics).toContainText("6.5");
   await executionScreenshot(page, "phase4-search-console.png");
 
-  await tabs("索引与 URL 检查");
+  const sources = page.getByRole("navigation", { name: "搜索分析来源", exact: true });
+  await sources.getByRole("link", { name: "GA4", exact: true }).click();
+  await expect(page.getByRole("table", { name: "GA4 自然搜索指标", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/seo/execution/analytics" && url.searchParams.get("site") === siteID,
+  );
+  await expect(metrics).toContainText("phase4 organic query");
+  await page.goForward();
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/seo/execution/ga4" && url.searchParams.get("site") === siteID,
+  );
+  await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+
+  await open("/seo/execution/indexing");
   await page.getByRole("button", { name: "检查 URL", exact: true }).click();
   const inspection = page.getByRole("dialog", { name: "检查 URL", exact: true });
   await inspection.getByLabel("目标 URL", { exact: true }).fill(`${siteURL}/existing`);
   await submitTask("检查 URL");
   await expect(index.getByRole("row").filter({ hasText: "Submitted and indexed" })).toContainText("已索引");
 
-  for (const [tab, table] of [
-    ["GA4", "GA4 自然搜索指标"],
-    ["Bing Webmaster", "Bing 搜索指标"],
-    ["提取监控", "提取结果"],
-    ["优化反馈", "内容优化反馈"],
-    ["执行任务", "站点执行任务"],
-    ["用量", "站点执行用量"],
+  for (const [path, table] of [
+    ["/seo/execution/ga4", "GA4 自然搜索指标"],
+    ["/seo/execution/bing", "Bing 搜索指标"],
+    ["/seo/execution/technical", "提取结果"],
+    ["/seo/execution/feedback", "内容优化反馈"],
+    ["/seo/execution/monitoring", "站点执行任务"],
+    ["/seo/execution/usage", "站点执行用量"],
   ]) {
-    await tabs(tab);
+    await open(path);
     await expect(page.getByRole("table", { name: table, exact: true })).toBeVisible();
   }
   await expect(page.getByRole("table", { name: "站点执行用量", exact: true })).toContainText(title);
