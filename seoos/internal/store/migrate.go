@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -78,45 +79,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT version, checksum
-		FROM public.seo_schema_migrations ORDER BY version`)
+	applied, err := migrationCount(ctx, tx, all)
 	if err != nil {
 		return err
 	}
-	applied := make(map[int64]string)
-	for rows.Next() {
-		var version int64
-		var checksum string
-		if err := rows.Scan(&version, &checksum); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		applied[version] = checksum
-	}
-	rowErr := rows.Err()
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if rowErr != nil {
-		return rowErr
-	}
-	for version, checksum := range applied {
-		if version > int64(len(all)) || version < 1 {
-			return fmt.Errorf("database contains unknown SEO migration version %d", version)
-		}
-		if checksum != all[version-1].checksum {
-			return fmt.Errorf("SEO migration %d checksum mismatch; restore the original migration file", version)
-		}
-	}
-	for i := 1; i <= len(applied); i++ {
-		if _, ok := applied[int64(i)]; !ok {
-			return fmt.Errorf("database SEO migration history has a gap at version %d", i)
-		}
-	}
-	for _, migration := range all {
-		if _, exists := applied[migration.version]; exists {
-			continue
-		}
+	for _, migration := range all[applied:] {
 		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			return fmt.Errorf("apply SEO migration %d: %w", migration.version, err)
 		}
@@ -126,4 +93,52 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// CheckMigrations verifies the exact embedded schema before a dedicated API
+// or worker starts. Deployment runs migrations in a separate one-shot process.
+func (s *Store) CheckMigrations(ctx context.Context) error {
+	all, err := migrations()
+	if err != nil {
+		return err
+	}
+	applied, err := migrationCount(ctx, s.db, all)
+	if err != nil {
+		return err
+	}
+	if applied != len(all) {
+		return fmt.Errorf("database has %d SEO migrations, want %d", applied, len(all))
+	}
+	return nil
+}
+
+type migrationReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func migrationCount(ctx context.Context, db migrationReader, all []migration) (int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT version, checksum FROM public.seo_schema_migrations ORDER BY version`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var version int64
+		var checksum string
+		if err := rows.Scan(&version, &checksum); err != nil {
+			return 0, err
+		}
+		if version > int64(len(all)) || version < 1 {
+			return 0, fmt.Errorf("database contains unknown SEO migration version %d", version)
+		}
+		if checksum != all[version-1].checksum {
+			return 0, fmt.Errorf("SEO migration %d checksum mismatch; restore the original migration file", version)
+		}
+		count++
+		if version != int64(count) {
+			return 0, fmt.Errorf("database SEO migration history has a gap at version %d", count)
+		}
+	}
+	return count, rows.Err()
 }

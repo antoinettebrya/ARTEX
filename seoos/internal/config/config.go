@@ -23,13 +23,14 @@ type Config struct {
 // Load reads only SEO-specific settings. Legacy ARTEX credentials and database
 // configuration are deliberately not inherited.
 func Load(getenv func(string) string) (Config, error) {
-	c := Config{
-		Address:          getenv("SEOOS_ADDR"),
-		DatabaseURL:      getenv("SEOOS_DATABASE_URL"),
-		OrganizationID:   getenv("SEOOS_ORGANIZATION_ID"),
-		OrganizationName: strings.TrimSpace(getenv("SEOOS_ORGANIZATION_NAME")),
-		APIToken:         getenv("SEOOS_API_TOKEN"),
+	c, err := LoadStorage(getenv)
+	if err != nil {
+		return Config{}, err
 	}
+	c.Address = getenv("SEOOS_ADDR")
+	c.OrganizationID = getenv("SEOOS_ORGANIZATION_ID")
+	c.OrganizationName = strings.TrimSpace(getenv("SEOOS_ORGANIZATION_NAME"))
+	c.APIToken = getenv("SEOOS_API_TOKEN")
 	if c.Address == "" {
 		c.Address = "127.0.0.1:8789"
 	}
@@ -41,14 +42,21 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil || parseErr != nil || p < 1 || p > 65535 {
 		return Config{}, errors.New("SEOOS_ADDR must be a host:port address with a port between 1 and 65535")
 	}
-	if strings.TrimSpace(c.DatabaseURL) == "" {
-		return Config{}, errors.New("SEOOS_DATABASE_URL is required")
-	}
 	if !domain.ValidID(c.OrganizationID) {
 		return Config{}, errors.New("SEOOS_ORGANIZATION_ID must be a nonzero canonical UUID")
 	}
 	if len(c.APIToken) < 32 || len(c.APIToken) > 512 || strings.ContainsFunc(c.APIToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || r > unicode.MaxASCII }) {
 		return Config{}, errors.New("SEOOS_API_TOKEN must be 32 to 512 ASCII characters without whitespace")
+	}
+	return c, nil
+}
+
+// LoadStorage reads the settings needed by a standalone worker, which does
+// not authenticate HTTP requests or bootstrap an organization.
+func LoadStorage(getenv func(string) string) (Config, error) {
+	c := Config{DatabaseURL: getenv("SEOOS_DATABASE_URL")}
+	if strings.TrimSpace(c.DatabaseURL) == "" {
+		return Config{}, errors.New("SEOOS_DATABASE_URL is required")
 	}
 	if raw := getenv("SEOOS_PROVIDER_KEY"); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)

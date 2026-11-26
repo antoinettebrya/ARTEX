@@ -1,0 +1,9 @@
+[Unit]
+Description=Encrypted ARTEX SEO OS staging PostgreSQL backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/bin/bash /opt/artex-seoos/current/seoos/deploy/backup.sh

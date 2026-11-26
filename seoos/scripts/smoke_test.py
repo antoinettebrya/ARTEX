@@ -45,12 +45,12 @@ def request(base, path, *, token=None, method="GET", data=None):
         return error.code, json.load(error)
 
 
-def start(dsn, organization, token):
+def start(dsn, organization, token, command="serve"):
     addr = address()
     env = dict(os.environ, SEOOS_DATABASE_URL=dsn, SEOOS_ORGANIZATION_ID=organization,
                SEOOS_ORGANIZATION_NAME="Disposable smoke test", SEOOS_API_TOKEN=token,
                SEOOS_ADDR=addr)
-    process = subprocess.Popen([str(BINARY), "serve"], env=env, cwd=ROOT,
+    process = subprocess.Popen([str(BINARY), command], env=env, cwd=ROOT,
                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     base = "http://" + addr
     try:

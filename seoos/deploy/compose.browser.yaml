@@ -1,0 +1,7 @@
+services:
+  worker:
+    cap_add: [SYS_CHROOT]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${ARTEX_PLAYWRIGHT_SECCOMP:?Set the verified Chromium seccomp profile path}
+    shm_size: 256m

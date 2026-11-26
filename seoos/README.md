@@ -25,6 +25,8 @@ Compose 包含 PostgreSQL 16，并将 API 绑定到 `127.0.0.1:8789`。数据库
 
 本地运行 Go 程序需要 Go 1.26.3 或更高版本。可执行 `go run ./cmd/seoos serve`，由程序在启动时应用迁移。仅迁移可执行 `go run ./cmd/seoos migrate`。环境变量可从秘密管理服务或当前 shell 提供。
 
+远程暂存使用 `migrate`、`api`、`worker` 和独立 Next.js 服务。`api` 和 `worker` 启动时核对迁移历史。参见 [暂存部署、健康检查、备份和回退](../docs/seo-os/STAGING_RUNBOOK.md)。
+
 | 环境变量 | 说明 |
 | --- | --- |
 | `SEOOS_DATABASE_URL` | 必填，专用 PostgreSQL DSN |
