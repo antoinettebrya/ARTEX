@@ -124,8 +124,8 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 	if in.Kind == "" {
 		in.Kind = ProviderOpenAI
 	}
-	if in.Kind != ProviderOpenAI && in.Kind != ProviderDataForSEO {
-		return in, invalid("kind", "must be openai or dataforseo")
+	if !IsModelProvider(in.Kind) && in.Kind != ProviderDataForSEO {
+		return in, invalid("kind", "must be openai, anthropic, gemini, deepseek or dataforseo")
 	}
 	if in.TimeoutSeconds < 1 || in.TimeoutSeconds > 30 {
 		return in, invalid("timeout_seconds", "must be between 1 and 30")
@@ -157,7 +157,7 @@ func (in ProviderInput) Normalize(creating bool) (ProviderInput, error) {
 			return in, invalid("kind", "DataForSEO settings require a DataForSEO provider")
 		}
 		if in.Model == "" || len(in.Model) > 100 || !identifier(in.Model) {
-			return in, invalid("model", "must be an OpenAI model identifier")
+			return in, invalid("model", "must be a provider model identifier")
 		}
 		if in.MaxOutputTokens < 16 || in.MaxOutputTokens > 4096 {
 			return in, invalid("max_output_tokens", "must be between 16 and 4096")

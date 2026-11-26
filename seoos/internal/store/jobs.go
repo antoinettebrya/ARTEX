@@ -34,19 +34,24 @@ func (s *Store) EnqueueJob(ctx context.Context, orgID string, input domain.JobIn
 	if err := input.Validate(); err != nil {
 		return domain.Job{}, false, err
 	}
-	return s.enqueueJob(ctx, orgID, input, nil)
+	return s.enqueueJob(ctx, orgID, input, nil, nil)
 }
 
-func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobInput, research *domain.ResearchInput) (domain.Job, bool, error) {
+func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobInput, research *domain.ResearchInput, content *domain.ContentJobInput) (domain.Job, bool, error) {
 	if err := validateOrganizationID(orgID); err != nil {
 		return domain.Job{}, false, err
 	}
 	var priority int
 	var request []byte
-	if research != nil {
-		priority = research.Priority
+	if research != nil || content != nil {
+		payload := any(research)
+		if research != nil {
+			priority = research.Priority
+		} else {
+			priority, payload = content.Priority, content
+		}
 		var err error
-		request, err = json.Marshal(research)
+		request, err = json.Marshal(payload)
 		if err != nil {
 			return domain.Job{}, false, err
 		}
@@ -69,6 +74,17 @@ func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobIn
 			var same bool
 			err = tx.QueryRowContext(ctx, `SELECT request = $3::jsonb FROM public.seo_research_jobs
 				WHERE organization_id = $1 AND job_id = $2`, orgID, job.ID, string(request)).Scan(&same)
+			if err != nil {
+				return domain.Job{}, err
+			}
+			if !same {
+				return domain.Job{}, domain.ErrIdempotencyConflict
+			}
+		}
+		if content != nil || input.Kind == domain.ContentInventory {
+			var same bool
+			err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CASE WHEN $4 THEN false ELSE request=NULLIF($3,'')::jsonb END
+				FROM public.seo_content_jobs WHERE organization_id=$1 AND job_id=$2),$4)`, orgID, job.ID, string(request), content == nil).Scan(&same)
 			if err != nil {
 				return domain.Job{}, err
 			}
@@ -100,7 +116,7 @@ func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobIn
 		if domain.UsesDataProvider(input.Kind) {
 			expected = domain.ProviderDataForSEO
 		}
-		if kind != expected {
+		if content != nil && !domain.IsModelProvider(kind) || content == nil && kind != expected {
 			return domain.Job{}, false, &domain.ValidationError{Field: "provider_id", Message: "provider type does not serve this job"}
 		}
 		if !enabled {
@@ -121,6 +137,11 @@ func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobIn
 	}
 	if research != nil {
 		if err := createResearchJob(ctx, tx, job, *research, request); err != nil {
+			return domain.Job{}, false, err
+		}
+	}
+	if content != nil {
+		if err := createContentJob(ctx, tx, job, *content, request); err != nil {
 			return domain.Job{}, false, err
 		}
 	}

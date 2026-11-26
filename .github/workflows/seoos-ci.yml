@@ -84,6 +84,7 @@ jobs:
       - name: Browser acceptance test
         env:
           SEOOS_E2E_RESEARCH: "1"
+          SEOOS_E2E_CONTENT: "1"
         run: python3 scripts/test_dashboard.py
       - name: Build isolated container
         run: docker build --tag artex-seoos:ci .

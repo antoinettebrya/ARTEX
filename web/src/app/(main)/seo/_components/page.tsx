@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { type SeoSection, seoTitles } from "@/lib/seo/routes";
 
 import { Audit } from "./audit";
+import { ContentStudio } from "./content";
 import { Jobs } from "./jobs";
 import { Members } from "./members";
 import { Providers } from "./providers";
@@ -35,6 +36,8 @@ export function SeoPage({ section }: { section: SeoSection }) {
       return <Jobs />;
     case "research":
       return <Research />;
+    case "content":
+      return <ContentStudio />;
     case "providers":
       return <Providers />;
     case "members":

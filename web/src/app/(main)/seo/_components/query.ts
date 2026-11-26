@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { seoRequest } from "@/lib/seo/client";
 
 type Result<T> = { path: string; revision: number; data?: T; error?: unknown };
 
-export function useSeoQuery<T>(path: string | null) {
+type QueryResult<T> = {
+  data: T | undefined;
+  error: unknown;
+  loading: boolean;
+  refreshing: boolean;
+  refresh: () => void;
+};
+
+export function useSeoQuery<T>(path: string | null): QueryResult<T> {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<Result<T>>();
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
   useEffect(() => {
     if (!path) return;
     const controller = new AbortController();
@@ -29,6 +38,6 @@ export function useSeoQuery<T>(path: string | null) {
     error: completed?.error,
     loading: !!path && !completed,
     refreshing: !!completed && completed.revision !== revision,
-    refresh: () => setRevision((value) => value + 1),
+    refresh,
   };
 }

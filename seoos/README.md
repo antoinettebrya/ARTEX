@@ -1,6 +1,6 @@
 # ARTEX SEO OS
 
-`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。参见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)和 [Phase 2 关键词与 SERP 研究](../docs/seo-os/PHASE2_RESEARCH.md)。
+`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。参见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)、[Phase 2 关键词与 SERP 研究](../docs/seo-os/PHASE2_RESEARCH.md)及 [Phase 3 内容智能](../docs/seo-os/PHASE3_CONTENT.md)。
 
 ## 启动
 
@@ -52,6 +52,8 @@ npm start -- --hostname 127.0.0.1
 
 在 `/seo/research` 可以提交和查看关键词拓展、指标、SERP、竞品页面、意图、聚类、Keyword-to-URL 与机会评分。站点详情可直接进入该站点的研究面板。组织所有者先在 Provider 页登记 DataForSEO 登录名、API 密码、请求限额和每日 USD 预算。市场代码、API 契约和回退流程见 [Phase 2 文档](../docs/seo-os/PHASE2_RESEARCH.md)。
 
+
+在 `/seo/content` 使用内容工作室。该模块读取 Phase 2 研究数据和经所有者授权的站点清单，支持简报、分章节写作、独立质量审核、版本管理和发布包。参见 [Phase 3 运行手册与 API](../docs/seo-os/PHASE3_CONTENT.md)。
 
 ## 组织、成员和权限
 
@@ -133,11 +135,11 @@ python3 scripts/load_test.py
 (cd ../web && npm ci && npm run build && npx tsc --noEmit && npx playwright install chromium)
 python3 scripts/test_dashboard.py
 go build -trimpath -tags seoos_testfixture -o bin/seoos-fixture ./cmd/seoos
-SEOOS_E2E_RESEARCH=1 python3 scripts/test_dashboard.py
+SEOOS_E2E_RESEARCH=1 SEOOS_E2E_CONTENT=1 python3 scripts/test_dashboard.py
 ```
 
 测试包含角色与跨组织隔离、站点 API 兼容、审计事务、队列幂等与接管、Provider 加密和配额、后台到真实 API 与 PostgreSQL 的浏览器流程。OpenAI 和 DataForSEO HTTP 契约测试使用本地固定响应。实测结果见[验证记录](VALIDATION.md)。
 
 ## 下一阶段
 
-内容生产和 Quality Gate 使用 Phase 2 的意图、聚类、竞品结构、页面映射与评分依据。周期调度、WordPress、媒体和分析模块见产品范围。Phase 0 源码来源和许可审查仍需完成。
+内容工作室已使用 Phase 2 研究数据。下一阶段可接入正式 CMS、可靠索引状态和分析数据，补充生产模型费用对账和定期更新。周期调度、媒体和分析模块见产品范围。Phase 0 源码来源和许可审查仍需完成。

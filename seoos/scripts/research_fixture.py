@@ -6,6 +6,8 @@ import base64
 import json
 from threading import Lock, Thread
 
+from content_fixture import SITE as CONTENT_SITE, SOURCE as CONTENT_SOURCE, TERM as CONTENT_TERM
+
 
 LOGIN = "phase-two-fixture@example.test"
 PASSWORD = "test-fixture-password-never-used-live"
@@ -19,7 +21,7 @@ INSTANT_TASK = "01161532-1535-0216-0000-9b351e1ad02c"
 def keyword_record(term, market):
     volume = 2400 if term == SEED else 720
     return dict(market, keyword=term, keyword_info={"search_volume": volume, "cpc": 1.25, "competition": 0.64},
-                keyword_properties={"keyword_difficulty": 37}, search_intent_info={"main_intent": "commercial"})
+                keyword_properties={"keyword_difficulty": 37}, search_intent_info={"main_intent": "informational" if term == CONTENT_TERM else "commercial"})
 
 
 def response_for(path, params):
@@ -58,11 +60,15 @@ def response_for(path, params):
         return 0.09, [dict(market, keyword=RELATED, search_volume=720, cpc=1.1, competition=0.6)]
     if path in {"/v3/serp/google/organic/live/advanced", "/v3/serp/bing/organic/live/advanced"}:
         urls = [COMPETITOR, OWNED] + [f"https://publication-{i}.example.com/best-robot-vacuum" for i in range(3, 11)]
+        title, description = "Best robot vacuum comparison", "Robot vacuum reviews and comparisons"
+        if term == CONTENT_TERM:
+            urls[:2] = [CONTENT_SOURCE, CONTENT_SITE + "/existing"]
+            title, description = "How to do robot vacuum maintenance", "Check the housing and clean the filter."
         if params["device"] == "mobile":
             urls[0], urls[1] = urls[1], urls[0]
         items = [dict(type="paid", rank_group=1, url="https://ads.example.com/robot-vacuum")]
         items.extend(dict(type="organic", rank_group=i, rank_absolute=i+1, url=url,
-                          title=f"Best robot vacuum comparison {i}", description="Robot vacuum reviews and comparisons")
+                          title=f"{title} {i}", description=description)
                      for i, url in enumerate(urls, 1))
         return 0.0035, [dict(market, se_type=path.split("/")[3], device=params["device"], items=items)]
     raise ValueError("unrecognized fixture request")

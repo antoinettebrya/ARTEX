@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,45 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
-import { TableCell, TableRow } from "@/components/ui/table";
-import { type Provider, SeoAPIError, seoRequest } from "@/lib/seo/client";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { type Provider, type ProviderKind, SeoAPIError, seoRequest } from "@/lib/seo/client";
 import { usd } from "@/lib/seo/research";
 
+import { ModelProfileEditor } from "./content/forms";
+import { EmptyContent } from "./content/views";
+import { useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
-import { field, Field, FormDialog, PageFrame, RecordsTable, StateBadge, useSeoList } from "./shared";
+import {
+  Field,
+  FormDialog,
+  field,
+  LoadError,
+  PageFrame,
+  PageSkeleton,
+  RecordsTable,
+  StateBadge,
+  useSeoList,
+} from "./shared";
+
+const providerNames: Record<ProviderKind, string> = {
+  openai: "OpenAI",
+  anthropic: "Claude",
+  gemini: "Gemini",
+  deepseek: "DeepSeek",
+  dataforseo: "DataForSEO",
+};
+
+type ContentUsage = {
+  provider_id: string;
+  name: string;
+  requests: number;
+  used_tokens: number;
+  reserved_tokens: number;
+  spent_micros: number;
+  reserved_micros: number;
+  daily_tokens: number;
+  daily_cost_micros: number;
+};
 
 function limitLabel(provider: Provider) {
   if (provider.kind !== "dataforseo") return `${provider.max_output_tokens} Token`;
@@ -32,7 +65,7 @@ function ProviderEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [kind, setKind] = useState(provider?.kind ?? "openai");
+  const [kind, setKind] = useState<ProviderKind>(provider?.kind ?? "openai");
   const isData = kind === "dataforseo";
 
   async function save(data: FormData) {
@@ -49,6 +82,7 @@ function ProviderEditor({
           daily_cost_micros: Math.round(Number(field(data, "daily_cost")) * 1_000_000),
         }
       : {
+          kind,
           model: field(data, "model"),
           api_key: field(data, "api_key") || undefined,
           max_output_tokens: Number(field(data, "max_output_tokens")),
@@ -83,10 +117,13 @@ function ProviderEditor({
           value={kind}
           disabled={!!provider}
           className="w-full"
-          onChange={(event) => setKind(event.target.value === "dataforseo" ? "dataforseo" : "openai")}
+          onChange={(event) => setKind(event.target.value as ProviderKind)}
         >
-          <NativeSelectOption value="openai">OpenAI</NativeSelectOption>
-          <NativeSelectOption value="dataforseo">DataForSEO</NativeSelectOption>
+          {Object.entries(providerNames).map(([value, label]) => (
+            <NativeSelectOption value={value} key={value}>
+              {label}
+            </NativeSelectOption>
+          ))}
         </NativeSelect>
       </Field>
       <Field id="provider-name" label="名称">
@@ -130,7 +167,7 @@ function ProviderEditor({
         </>
       ) : (
         <>
-          <Field id="provider-model" label="OpenAI 模型">
+          <Field id="provider-model" label={`${providerNames[kind]} 模型`}>
             <Input id="provider-model" name="model" required maxLength={100} defaultValue={provider?.model} />
           </Field>
           <Field id="provider-key" label="API 密钥">
@@ -204,11 +241,12 @@ export function Providers() {
   const owner = principal.role === "owner";
   const list = useSeoList<Provider>("providers");
   const [edit, setEdit] = useState<Provider | null>();
+  const [model, setModel] = useState<Provider>();
 
   return (
     <PageFrame
       title="Provider"
-      description="管理 OpenAI 和 DataForSEO 的调用配额与预算。"
+      description="管理模型和数据服务的调用配额与预算。"
       actions={
         owner && (
           <Button variant="outline" size="sm" onClick={() => setEdit(null)}>
@@ -228,7 +266,9 @@ export function Providers() {
             <TableCell className="px-3 py-2">
               <div className="font-medium">{provider.name}</div>
               <code className="font-mono text-muted-foreground text-xs">
-                {provider.kind === "dataforseo" ? "DataForSEO" : provider.model}
+                {provider.kind === "dataforseo"
+                  ? "DataForSEO"
+                  : `${providerNames[provider.kind ?? "openai"]} · ${provider.model}`}
               </code>
             </TableCell>
             <TableCell className="px-3 tabular-nums">
@@ -252,14 +292,72 @@ export function Providers() {
                 >
                   <Pencil />
                 </Button>
+                {provider.kind !== "dataforseo" && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={`配置 ${provider.name} 内容模型`}
+                    onClick={() => setModel(provider)}
+                  >
+                    <Settings2 />
+                  </Button>
+                )}
               </TableCell>
             )}
           </TableRow>
         ))}
       </RecordsTable>
+      {owner && <ContentModelUsage />}
       {edit !== undefined && owner && (
         <ProviderEditor provider={edit ?? undefined} onClose={() => setEdit(undefined)} onSaved={list.refresh} />
       )}
+      {model && owner && <ModelProfileEditor provider={model} onClose={() => setModel(undefined)} />}
     </PageFrame>
+  );
+}
+
+function ContentModelUsage() {
+  const usage = useSeoQuery<{ items: ContentUsage[] }>("/content/usage");
+  const rows = usage.data?.items ?? [];
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-medium text-sm">今日内容模型用量（UTC）</h2>
+        <Button type="button" size="sm" variant="outline" onClick={usage.refresh}>
+          <RefreshCw /> 刷新模型用量
+        </Button>
+      </div>
+      {usage.loading && <PageSkeleton />}
+      {usage.error !== undefined && <LoadError error={usage.error} retry={usage.refresh} />}
+      {!!rows.length && (
+        <Table aria-label="内容模型用量">
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Provider</TableHead>
+              <TableHead scope="col">请求</TableHead>
+              <TableHead scope="col">已用 / 预留 / 预算 Token</TableHead>
+              <TableHead scope="col">估算费用 / 预留 / 日预算</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.provider_id}>
+                <TableCell>{row.name}</TableCell>
+                <TableCell className="tabular-nums">{row.requests}</TableCell>
+                <TableCell className="tabular-nums">
+                  {row.used_tokens} / {row.reserved_tokens} / {row.daily_tokens}
+                </TableCell>
+                <TableCell className="tabular-nums">
+                  {[row.spent_micros, row.reserved_micros, row.daily_cost_micros]
+                    .map((value) => usd.format(value / 1_000_000))
+                    .join(" / ")}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      {!usage.loading && usage.error === undefined && rows.length === 0 && <EmptyContent title="暂无内容模型用量" />}
+    </section>
   );
 }

@@ -24,14 +24,14 @@ type briefing interface {
 
 // Run polls PostgreSQL as the master dispatcher. Lease recovery also works
 // when multiple service processes are running against the same database.
-func Run(ctx context.Context, repo repository, provider domain.SEODataProvider) {
-	run(ctx, repo, openAI{endpoint: "https://api.openai.com/v1/responses"}, provider)
+func Run(ctx context.Context, repo repository, provider domain.SEODataProvider, content *ContentServices) {
+	run(ctx, repo, openAI{endpoint: "https://api.openai.com/v1/responses"}, provider, content)
 }
 
-func run(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider) {
+func run(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices) {
 	ctx = domain.WithPrincipal(ctx, domain.Principal{Kind: "worker"})
 	for ctx.Err() == nil {
-		found, err := runOnce(ctx, repo, briefs, provider)
+		found, err := runOnce(ctx, repo, briefs, provider, content)
 		if err == nil && found {
 			continue
 		}
@@ -47,7 +47,7 @@ func run(ctx context.Context, repo repository, briefs briefing, provider domain.
 	}
 }
 
-func runOnce(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider) (bool, error) {
+func runOnce(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices) (bool, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	lease, err := repo.ClaimJob(claimCtx)
 	cancel()
@@ -56,11 +56,11 @@ func runOnce(ctx context.Context, repo repository, briefs briefing, provider dom
 	}
 
 	timeout := 40 * time.Second
-	if domain.IsResearchKind(lease.Job.Kind) {
+	if domain.IsResearchKind(lease.Job.Kind) || domain.IsContentKind(lease.Job.Kind) {
 		timeout = 70 * time.Second
 	}
 	workCtx, cancel := context.WithTimeout(ctx, timeout)
-	outcome := dispatch(workCtx, repo, *lease, briefs, provider)
+	outcome := dispatch(workCtx, repo, *lease, briefs, provider, content)
 	cancel()
 
 	finishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -72,7 +72,7 @@ func runOnce(ctx context.Context, repo repository, briefs briefing, provider dom
 	return true, err
 }
 
-func dispatch(ctx context.Context, repo repository, lease domain.Lease, briefs briefing, provider domain.SEODataProvider) domain.JobOutcome {
+func dispatch(ctx context.Context, repo repository, lease domain.Lease, briefs briefing, provider domain.SEODataProvider, content *ContentServices) domain.JobOutcome {
 	site, err := repo.GetSite(ctx, lease.Job.OrganizationID, lease.Job.SiteID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -85,6 +85,11 @@ func dispatch(ctx context.Context, repo repository, lease domain.Lease, briefs b
 	}
 	if domain.IsResearchKind(lease.Job.Kind) {
 		return researchJob(ctx, repo, provider, briefs, lease, site)
+	}
+	if domain.IsContentKind(lease.Job.Kind) {
+		if outcome, handled := contentJob(ctx, repo, lease, site, content); handled {
+			return outcome
+		}
 	}
 	switch lease.Job.Kind {
 	case domain.JobSiteInventory:

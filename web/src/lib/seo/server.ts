@@ -11,6 +11,9 @@ const providerPath = new RegExp(`^/providers/${ID}$`);
 const memberRolePath = new RegExp(`^/members/${ID}/role$`);
 const memberTokenPath = new RegExp(`^/members/${ID}/token$`);
 const snapshotPath = new RegExp(`^/research/snapshots/${ID}$`);
+const contentProjectPath = new RegExp(`^/content/projects/${ID}$`);
+const contentActionPath = new RegExp(`^/content/projects/${ID}/actions$`);
+const contentPagePath = new RegExp(`^/content/inventory/${ID}$`);
 const researchLists = new Set([
   "/research/seeds",
   "/research/suggestions",
@@ -26,6 +29,14 @@ const researchLists = new Set([
   "/research/usage",
 ]);
 const lists = new Set(["/sites", "/jobs", "/providers", "/members"]);
+const contentLists = new Set([
+  "/content/projects",
+  "/content/jobs",
+  "/content/inventory",
+  "/content/crawl",
+  "/content/models",
+  "/content/usage",
+]);
 const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/seo", maxAge: 8 * 60 * 60 } as const;
 const maxBodyBytes = 64 * 1024;
@@ -41,16 +52,33 @@ function permits(path: string, method: string): boolean {
       return (
         lists.has(path) ||
         researchLists.has(path) ||
+        contentLists.has(path) ||
         path === "/me" ||
         path === "/audit" ||
         sitePath.test(path) ||
         jobPath.test(path) ||
-        snapshotPath.test(path)
+        snapshotPath.test(path) ||
+        contentProjectPath.test(path) ||
+        contentPagePath.test(path)
       );
     case "POST":
-      return lists.has(path) || path === "/research/jobs" || path === "/research/pages" || memberTokenPath.test(path);
+      return (
+        lists.has(path) ||
+        path === "/research/jobs" ||
+        path === "/research/pages" ||
+        path === "/content/projects" ||
+        path === "/content/jobs" ||
+        contentActionPath.test(path) ||
+        memberTokenPath.test(path)
+      );
     case "PUT":
-      return sitePath.test(path) || providerPath.test(path) || memberRolePath.test(path);
+      return (
+        sitePath.test(path) ||
+        providerPath.test(path) ||
+        memberRolePath.test(path) ||
+        path === "/content/crawl" ||
+        path === "/content/models"
+      );
     case "DELETE":
       return jobPath.test(path) || memberTokenPath.test(path);
     default:

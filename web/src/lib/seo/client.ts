@@ -1,3 +1,4 @@
+import type { ContentJobKind } from "./content";
 import type { ResearchKind } from "./research";
 
 export type Role = "owner" | "editor" | "viewer";
@@ -15,16 +16,17 @@ export type Site = {
 export type Job = {
   id: string;
   site_id: string;
-  kind: "site_inventory" | "site_brief" | ResearchKind;
+  kind: "site_inventory" | "site_brief" | ResearchKind | ContentJobKind;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   attempts: number;
   available_at: string;
   error_code?: string;
   result?: unknown;
 };
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "deepseek" | "dataforseo";
 export type Provider = {
   id: string;
-  kind?: "openai" | "dataforseo";
+  kind?: ProviderKind;
   daily_cost_micros?: number;
   name: string;
   model: string;
@@ -66,6 +68,9 @@ const messages: Record<string, string> = {
   credential_store_unavailable: "服务尚未配置 Provider 凭据加密。",
   job_settled: "任务已结束。",
   idempotency_conflict: "此表单已提交，请重新打开后再创建任务。",
+  content_prerequisite: "请先完成所需的采集、研究或内容版本。",
+  content_gate_blocked: "当前版本需要质量审核通过并获得所有者批准。",
+  crawl_unauthorized: "请让组织所有者先授权本站的读取范围。",
 };
 
 export class SeoAPIError extends Error {

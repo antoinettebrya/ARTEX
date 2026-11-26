@@ -3,13 +3,14 @@
 import { useState } from "react";
 
 import Link from "next/link";
+
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import { type Job, type Provider, seoRequest, type Site } from "@/lib/seo/client";
+import { type Job, type Provider, type Site, seoRequest } from "@/lib/seo/client";
 import {
   type Market,
   type PageEvidence,
@@ -20,11 +21,11 @@ import {
 } from "@/lib/seo/research";
 
 import { useSeoQuery } from "../query";
-import { field, Field, FormDialog, LoadError } from "../shared";
+import { Field, FormDialog, field, LoadError } from "../shared";
 
 export type JobDraft = { kind: ResearchKind; keyword?: string; market: Market; targetURL?: string };
 
-function MarketFields({ market }: { market: Market }) {
+export function MarketFields({ market }: { market: Market }) {
   return (
     <>
       <Field id="research-market-country" label="国家或地区">
@@ -86,7 +87,7 @@ function MarketFields({ market }: { market: Market }) {
   );
 }
 
-function readMarket(data: FormData): Market {
+export function readMarket(data: FormData): Market {
   return {
     country_code: field(data, "country_code").trim().toUpperCase(),
     language_code: field(data, "language_code").trim(),
@@ -132,7 +133,8 @@ export function ResearchJobEditor({
     paid || kind === "keyword_intent" ? "/providers?limit=200" : null,
   );
   const selectable = (providers.data?.providers ?? []).filter(
-    (provider) => provider.enabled && (paid ? provider.kind === "dataforseo" : provider.kind !== "dataforseo"),
+    (provider) =>
+      provider.enabled && (paid ? provider.kind === "dataforseo" : (provider.kind ?? "openai") === "openai"),
   );
 
   async function save(data: FormData) {

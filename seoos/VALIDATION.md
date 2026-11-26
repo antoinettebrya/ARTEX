@@ -100,3 +100,21 @@ canonical URL length.
 研究浏览器流程使用回环 HTTP Provider、真实 Go Worker 与临时 PostgreSQL。真实 DataForSEO 调用为 0 次，真实费用为 0。真账号的地区覆盖、数据可用性和费用对账待验。150 站以上实测范围为站点库存任务，付费研究任务的生产负载仍需采集实测数据。
 
 数据库迁移、研究 API、缓存有效期、预算和回退步骤见 [Phase 2 研究契约](../docs/seo-os/PHASE2_RESEARCH.md)。
+
+## Phase 3 内容智能与质量门禁 · 2026-11-26
+
+基线 `a76367c3a55b433604d33f333bfca91e1f59020f`。本地验收使用 macOS arm64、Go 1.26.3、PostgreSQL 16.16、Node.js 24 和 Chrome。Go 服务、队列、数据库和 Next.js 均使用实际运行版本。DataForSEO、Model Provider、授权站点和一手资料使用本地固定 HTTP 夹具。
+
+| 检查 | 实测结果 |
+| --- | --- |
+| `go test -race -count=1 ./...` | 82 项顶层测试通过。覆盖 6 种语言的简报与语言检查、事实冲突和过时、重要断言引用、重复和蚕食、12 项门禁、模型契约和采集边界 |
+| PostgreSQL Phase 3 集成 | 覆盖同站市场证据、跨组织与站点隔离、版本恢复、审批权限、增量快照、旧任务接管和模型请求预留去重 |
+| `go mod verify`、`go vet ./...`、标准与夹具 Go 构建 | 通过。256 个运行依赖包均与旧 ARTEX 业务和 Norma 隔离 |
+| `python3 scripts/smoke_test.py` 与 `python3 scripts/load_test.py` | 原 HTTP、组织、审计和持久化流程通过。160 站库存基线零失败 |
+| 旧二进制实测 `a76367c → 0005` | 保留 Phase 2 SERP 快照 ID，新项目读取同一证据。旧二进制从迁移前数据库副本启动并读回该快照 |
+| `npm run build:static`、`npm run build`、`npx tsc --noEmit` | 通过。15 个变更前端文件的定向 Biome 检查通过。全量 lint 仍报告基线 84 项 |
+| `SEOOS_E2E_RESEARCH=1 SEOOS_E2E_CONTENT=1 python3 scripts/test_dashboard.py` | 4 条 Chrome 回归通过。内容用例覆盖 Phase 2 证据、站点发现与采集、来源事实、分章节写作、独立质量审核、版本比较、单独审批和导出。旧 HTML 核验失败，夹具 CMS 呈现导出文章后核验成功 |
+
+内容 E2E 加上 Phase 2 回归共发出 13 次回环 DataForSEO 请求。模型合同共 5 次回环请求，分别为大纲 1 次、章节 3 次、独立审核 1 次。固定回执给出 1374 个输入与输出 Token，按测试配置的单价结算估算费用。真实 DataForSEO、模型和正式 CMS 调用均为 0 次。正式账号的输出质量、费率与账单仍需单独验收。站点清单和更新信号要达到生产覆盖，还需实际站点、可靠索引源与分析数据接入。
+
+实测视觉范围为 1440 × 900 的浅色桌面、390 × 844 的暗色 Tangerine，以及 ARTEX 原有模式偏好回归。API、采集授权、模型预算和回退见 [Phase 3 运行手册](../docs/seo-os/PHASE3_CONTENT.md)。

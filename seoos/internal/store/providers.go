@@ -188,10 +188,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease) (do
 	minuteStart := now.Add(-time.Minute)
 	var daily, minute int
 	var oldest sql.NullTime
-	err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE reserved_at >= $3),
-		count(*) FILTER (WHERE reserved_at > $4), min(reserved_at) FILTER (WHERE reserved_at > $4)
-		FROM public.seo_provider_calls
-		WHERE organization_id=$1 AND provider_id=$2 AND reserved_at >= least($3::timestamptz, $4::timestamptz)`,
+	err = tx.QueryRowContext(ctx, modelRequests,
 		job.OrganizationID, provider.ID, dayStart, minuteStart).Scan(&daily, &minute, &oldest)
 	if err != nil {
 		return domain.ProviderCall{}, err

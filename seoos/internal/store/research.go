@@ -23,7 +23,7 @@ func (s *Store) EnqueueResearch(ctx context.Context, orgID string, input domain.
 	}
 	return s.enqueueJob(ctx, orgID, domain.JobInput{
 		SiteID: in.SiteID, ProviderID: provider, Kind: in.Kind, IdempotencyKey: in.IdempotencyKey,
-	}, &in)
+	}, &in, nil)
 }
 
 func createResearchJob(ctx context.Context, tx *sql.Tx, job domain.Job, in domain.ResearchInput, request []byte) error {
