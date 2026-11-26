@@ -18,7 +18,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -60,7 +60,11 @@ jobs:
           assert not blocked, f"Legacy runtime dependency found: {blocked}"
           print(f"Verified {len(deps)} isolated dependencies")
           PY
+      - name: Install PDF test runtime
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: Unit and PostgreSQL integration tests with race detector
+        env:
+          SEOOS_REQUIRE_POPPLER: "1"
         run: go test -race -count=1 ./...
       - name: Vet and build
         run: |
@@ -69,8 +73,12 @@ jobs:
           go build -trimpath -tags seoos_testfixture -o bin/seoos-fixture ./cmd/seoos
       - name: HTTP and PostgreSQL smoke test
         run: python3 scripts/smoke_test.py
+      - name: Google, Bing, and IndexNow HTTP contracts with PostgreSQL
+        run: python3 scripts/smoke_execution.py
       - name: Local 160-site load test
         run: python3 scripts/load_test.py
+      - name: Real disposable WordPress publication and rollback
+        run: bash scripts/test_wordpress.sh
       - name: Build and check dashboard
         working-directory: web
         env:
@@ -85,6 +93,9 @@ jobs:
         env:
           SEOOS_E2E_RESEARCH: "1"
           SEOOS_E2E_CONTENT: "1"
+          SEOOS_E2E_EXECUTION: "1"
         run: python3 scripts/test_dashboard.py
       - name: Build isolated container
         run: docker build --tag artex-seoos:ci .
+      - name: Exercise PDF and Chromium extraction inside the sandbox runtime
+        run: bash scripts/test_extraction.sh

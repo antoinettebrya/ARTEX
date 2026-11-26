@@ -8,6 +8,7 @@ import { type SeoSection, seoTitles } from "@/lib/seo/routes";
 
 import { Audit } from "./audit";
 import { ContentStudio } from "./content";
+import { ExecutionCenter } from "./execution";
 import { Jobs } from "./jobs";
 import { Members } from "./members";
 import { Providers } from "./providers";
@@ -38,6 +39,8 @@ export function SeoPage({ section }: { section: SeoSection }) {
       return <Research />;
     case "content":
       return <ContentStudio />;
+    case "execution":
+      return <ExecutionCenter />;
     case "providers":
       return <Providers />;
     case "members":

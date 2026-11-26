@@ -214,6 +214,9 @@ func (s *Store) CancelJob(ctx context.Context, orgID, jobID string) (domain.Job,
 	if err != nil {
 		return domain.Job{}, err
 	}
+	if err := executionAbandoned(ctx, tx, job, "job_cancelled", "cancel"); err != nil {
+		return domain.Job{}, err
+	}
 	if err := auditJob(ctx, tx, "job.cancel", job); err != nil {
 		return domain.Job{}, err
 	}
@@ -241,6 +244,9 @@ func (s *Store) ClaimJob(ctx context.Context) (*domain.Lease, error) {
 	if job.Attempts >= domain.MaxJobAttempts {
 		job, err = setJobState(ctx, tx, job, "failed", "lease_expired", nil, job.AvailableAt, job.Attempts)
 		if err != nil {
+			return nil, err
+		}
+		if err := executionAbandoned(ctx, tx, job, "lease_expired", "lease_expired"); err != nil {
 			return nil, err
 		}
 		if err := auditJob(ctx, tx, "job.fail", job); err != nil {
@@ -314,6 +320,11 @@ func (s *Store) FinishJob(ctx context.Context, lease domain.Lease, outcome domai
 	job, err = setJobState(ctx, tx, job, state, outcome.Code, outcome.Result, runAt, attempts)
 	if err != nil {
 		return err
+	}
+	if state == "failed" {
+		if err := executionAbandoned(ctx, tx, job, outcome.Code, "failure"); err != nil {
+			return err
+		}
 	}
 	if err := auditJob(ctx, tx, action, job); err != nil {
 		return err

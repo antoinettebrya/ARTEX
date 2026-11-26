@@ -26,18 +26,19 @@ const (
 )
 
 type handler struct {
-	repo           domain.Repository
-	access         domain.AccessRepository
-	jobs           domain.JobRepository
-	providers      domain.ProviderRepository
-	organizationID string
-	tokenHash      [sha256.Size]byte
+	executionFixture *http.Client
+	repo             domain.Repository
+	access           domain.AccessRepository
+	jobs             domain.JobRepository
+	providers        domain.ProviderRepository
+	organizationID   string
+	tokenHash        [sha256.Size]byte
 }
 
 // NewHandler keeps the configured credential scoped to its bootstrap organization.
 // Member credentials resolve to their own organization on every API request.
 // The caller must provide TLS when exposing the service outside localhost.
-func NewHandler(repo domain.Repository, organizationID, bearerToken string) (http.Handler, error) {
+func NewHandler(repo domain.Repository, organizationID, bearerToken string, executionFixture ...*http.Client) (http.Handler, error) {
 	if repo == nil {
 		return nil, errors.New("API repository is required")
 	}
@@ -55,7 +56,11 @@ func NewHandler(repo domain.Repository, organizationID, bearerToken string) (htt
 	access, _ := repo.(domain.AccessRepository)
 	jobs, _ := repo.(domain.JobRepository)
 	providers, _ := repo.(domain.ProviderRepository)
-	return &handler{repo: repo, access: access, jobs: jobs, providers: providers, organizationID: organizationID, tokenHash: sha256.Sum256([]byte(bearerToken))}, nil
+	h := &handler{repo: repo, access: access, jobs: jobs, providers: providers, organizationID: organizationID, tokenHash: sha256.Sum256([]byte(bearerToken))}
+	if len(executionFixture) > 0 {
+		h.executionFixture = executionFixture[0]
+	}
+	return h, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +85,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		r = r.WithContext(domain.WithPrincipal(ctx, principal))
-		if h.serveAccess(w, r, principal) || h.serveRuntime(w, r, principal) || h.serveResearch(w, r, principal) || h.serveContent(w, r, principal) {
+		if h.serveAccess(w, r, principal) || h.serveRuntime(w, r, principal) || h.serveResearch(w, r, principal) || h.serveContent(w, r, principal) || h.serveExecution(w, r, principal) {
 			return
 		}
 		if (r.URL.Path == "/api/v1/sites" || strings.HasPrefix(r.URL.Path, "/api/v1/sites/")) && (r.Method == http.MethodPost || r.Method == http.MethodPut) && !principal.Role.CanWrite() {
@@ -247,12 +252,16 @@ func (h *handler) updateSite(w http.ResponseWriter, r *http.Request, siteID stri
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
+	return readJSONLimit(w, r, destination, maxBodyBytes)
+}
+
+func readJSONLimit(w http.ResponseWriter, r *http.Request, destination any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || !strings.EqualFold(mediaType, "application/json") {
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json.")
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -271,7 +280,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 func writeJSONError(w http.ResponseWriter, err error) {
 	var maxBytes *http.MaxBytesError
 	if errors.As(err, &maxBytes) {
-		writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body exceeds the 64 KiB limit.")
+		writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body exceeds the supported size limit.")
 		return
 	}
 	writeError(w, http.StatusBadRequest, "invalid_json", "Request body must contain one valid JSON object with supported fields.")

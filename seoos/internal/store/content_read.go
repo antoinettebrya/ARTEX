@@ -12,18 +12,19 @@ import (
 )
 
 type contentState struct {
-	Strategy       *domain.ContentStrategy      `json:"strategy,omitempty"`
-	BriefVersion   int                          `json:"brief_version"`
-	Outline        []domain.ContentHeading      `json:"outline,omitempty"`
-	ArticleVersion int                          `json:"article_version"`
-	FactIDs        []string                     `json:"fact_ids,omitempty"`
-	FactCheck      *domain.FactReport           `json:"fact_check,omitempty"`
-	Review         *domain.EditorialReview      `json:"review,omitempty"`
-	Quality        *domain.ContentQuality       `json:"quality,omitempty"`
-	Refresh        *domain.ContentRefreshResult `json:"refresh,omitempty"`
-	Signals        domain.RefreshSignals        `json:"signals"`
-	LastWriterID   string                       `json:"last_writer_id,omitempty"`
-	LastWriter     string                       `json:"last_writer,omitempty"`
+	ExecutionFeedback json.RawMessage              `json:"execution_feedback,omitempty"`
+	Strategy          *domain.ContentStrategy      `json:"strategy,omitempty"`
+	BriefVersion      int                          `json:"brief_version"`
+	Outline           []domain.ContentHeading      `json:"outline,omitempty"`
+	ArticleVersion    int                          `json:"article_version"`
+	FactIDs           []string                     `json:"fact_ids,omitempty"`
+	FactCheck         *domain.FactReport           `json:"fact_check,omitempty"`
+	Review            *domain.EditorialReview      `json:"review,omitempty"`
+	Quality           *domain.ContentQuality       `json:"quality,omitempty"`
+	Refresh           *domain.ContentRefreshResult `json:"refresh,omitempty"`
+	Signals           domain.RefreshSignals        `json:"signals"`
+	LastWriterID      string                       `json:"last_writer_id,omitempty"`
+	LastWriter        string                       `json:"last_writer,omitempty"`
 }
 
 type contentRecord struct {

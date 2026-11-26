@@ -1,4 +1,5 @@
 import type { ContentJobKind } from "./content";
+import type { ExecutionJobKind } from "./execution";
 import type { ResearchKind } from "./research";
 
 export type Role = "owner" | "editor" | "viewer";
@@ -16,7 +17,7 @@ export type Site = {
 export type Job = {
   id: string;
   site_id: string;
-  kind: "site_inventory" | "site_brief" | ResearchKind | ContentJobKind;
+  kind: "site_inventory" | "site_brief" | ResearchKind | ContentJobKind | ExecutionJobKind;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   attempts: number;
   available_at: string;
@@ -70,6 +71,13 @@ const messages: Record<string, string> = {
   idempotency_conflict: "此表单已提交，请重新打开后再创建任务。",
   content_prerequisite: "请先完成所需的采集、研究或内容版本。",
   content_gate_blocked: "当前版本需要质量审核通过并获得所有者批准。",
+  execution_state: "当前状态无法执行此操作。请刷新发布记录并检查可用操作。",
+  execution_unauthorized: "请确认连接的权限与显式站点授权。",
+  execution_unsupported: "此连接未声明支持该操作。",
+  execution_media_too_large: "请选择不超过 4 MiB 的媒体文件。",
+  execution_media_read: "无法读取媒体文件，请重新选择。",
+  execution_oauth_response: "授权响应无效。请重新发起 Google 授权。",
+  execution_credential_pair: "请提供完整的一组连接凭据。",
   crawl_unauthorized: "请让组织所有者先授权本站的读取范围。",
 };
 

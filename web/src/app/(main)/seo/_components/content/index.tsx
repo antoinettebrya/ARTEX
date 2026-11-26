@@ -65,9 +65,10 @@ export function ContentStudio() {
   const params = useSearchParams();
   const linkedSite = params.get("site") ?? "";
   const linkedKeyword = params.get("keyword")?.slice(0, 400);
+  const linkedProject = params.get("project") ?? "";
   const sites = useSeoQuery<{ sites: Site[] }>("/sites?limit=200");
   const [chosenSite, chooseSite] = useState("");
-  const [tab, setTab] = useState<ContentTab>("overview");
+  const [tab, setTab] = useState<ContentTab>(params.get("view") === "refresh" ? "refresh" : "overview");
   const choices = sites.data?.sites ?? [];
   const siteID = chosenSite || (isID(linkedSite) ? linkedSite : (choices[0]?.id ?? ""));
   const listed = choices.find((site) => site.id === siteID);
@@ -76,7 +77,9 @@ export function ContentStudio() {
   const options = site && !listed ? [site, ...choices] : choices;
   const [showProject, setShowProject] = useState(false);
   const [newSelection, setNewSelection] = useState<{ site: string; id: string }>();
-  const selected = newSelection?.site === site?.id ? newSelection?.id : undefined;
+  const selected =
+    (newSelection?.site === site?.id ? newSelection?.id : undefined) ??
+    (site?.id === linkedSite && isID(linkedProject) ? linkedProject : undefined);
 
   return (
     <PageFrame
@@ -124,7 +127,7 @@ export function ContentStudio() {
           writable={writable}
           tab={tab}
           setTab={setTab}
-          createdProject={selected}
+          preferredProject={selected}
         />
       ) : (
         !sites.loading &&
@@ -159,20 +162,20 @@ function SiteStudio({
   writable,
   tab,
   setTab,
-  createdProject,
+  preferredProject,
 }: {
   site: Site;
   owner: boolean;
   writable: boolean;
   tab: ContentTab;
   setTab: (tab: ContentTab) => void;
-  createdProject?: string;
+  preferredProject?: string;
 }) {
   const projects = useSeoQuery<{ items: ContentProject[] }>(`/content/projects?site_id=${site.id}&limit=200`);
   const [projectSelection, setProjectSelection] = useState<{ created?: string; id: string }>();
   const selectedProject =
-    (projectSelection?.created === createdProject ? projectSelection?.id : undefined) ??
-    createdProject ??
+    (projectSelection?.created === preferredProject ? projectSelection?.id : undefined) ??
+    preferredProject ??
     projects.data?.items?.[0]?.id;
   const query = useSeoQuery<{ workspace: ContentWorkspace }>(
     selectedProject && tab !== "inventory" ? `/content/projects/${selectedProject}` : null,
@@ -186,7 +189,7 @@ function SiteStudio({
   const [restore, setRestore] = useState<ContentVersion>();
   const [taskRevision, setTaskRevision] = useState(0);
   const active = writable && site.status === "active";
-  const loaded = query.data?.workspace;
+  const loaded = query.data?.workspace.project.site_id === site.id ? query.data.workspace : undefined;
   const local = updated?.project.id === selectedProject && tab !== "inventory" ? updated : undefined;
   const workspace = local && local.project.revision >= (loaded?.project.revision ?? 0) ? local : loaded;
   const current = workspace?.project;
@@ -228,7 +231,7 @@ function SiteStudio({
                   className="w-full"
                   value={selectedProject}
                   onChange={(event) => {
-                    setProjectSelection({ created: createdProject, id: event.target.value });
+                    setProjectSelection({ created: preferredProject, id: event.target.value });
                     projects.refresh();
                   }}
                 >

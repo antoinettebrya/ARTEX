@@ -46,20 +46,31 @@ func New(client *http.Client) *Crawler {
 		}
 	}
 	if value.Transport == nil {
-		value.Transport = &http.Transport{
-			DialContext:            dialPublic,
-			ForceAttemptHTTP2:      true,
-			MaxIdleConns:           32,
-			MaxIdleConnsPerHost:    2,
-			IdleConnTimeout:        30 * time.Second,
-			TLSHandshakeTimeout:    4 * time.Second,
-			ResponseHeaderTimeout:  5 * time.Second,
-			MaxResponseHeaderBytes: 64 << 10,
-		}
+		value.Transport = NewPublicHTTPClient(requestTimeout).Transport
 	}
 	value.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	value.Jar = nil
 	return &Crawler{client: &value, next: make(map[string]time.Time)}
+}
+
+// NewPublicHTTPClient pins public DNS answers, keeps credentials on the
+// original host, and uses a bounded timeout. It never follows redirects.
+func NewPublicHTTPClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 || timeout > 30*time.Second {
+		timeout = requestTimeout
+	}
+	return &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}, Transport: &http.Transport{
+		DialContext:            dialPublic,
+		ForceAttemptHTTP2:      true,
+		MaxIdleConns:           32,
+		MaxIdleConnsPerHost:    2,
+		IdleConnTimeout:        30 * time.Second,
+		TLSHandshakeTimeout:    4 * time.Second,
+		ResponseHeaderTimeout:  5 * time.Second,
+		MaxResponseHeaderBytes: 64 << 10,
+	}}
 }
 
 // ValidatePolicy normalizes an owner's read authorization against its current

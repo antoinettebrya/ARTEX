@@ -1,8 +1,17 @@
-import { ClipboardList, FileText, Globe, Plug, ScrollText, Search, Users } from "lucide-react";
+import { ClipboardList, FileText, Globe, Network, Plug, ScrollText, Search, Users } from "lucide-react";
 
 import type { NavGroup } from "@/navigation/sidebar/sidebar-items";
 
-export const SEO_SECTIONS = ["sites", "jobs", "research", "content", "providers", "members", "audit"] as const;
+export const SEO_SECTIONS = [
+  "sites",
+  "jobs",
+  "research",
+  "content",
+  "execution",
+  "providers",
+  "members",
+  "audit",
+] as const;
 export type SeoSection = (typeof SEO_SECTIONS)[number];
 
 export const seoTitles: Record<SeoSection, string> = {
@@ -10,6 +19,7 @@ export const seoTitles: Record<SeoSection, string> = {
   jobs: "任务",
   research: "SEO 研究",
   content: "内容工作室",
+  execution: "站点执行",
   providers: "Provider",
   members: "成员",
   audit: "审计日志",
@@ -25,6 +35,7 @@ export function seoGroups(owner: boolean): NavGroup[] {
         { id: "seo-jobs", title: seoTitles.jobs, url: "/seo/jobs", icon: ClipboardList },
         { id: "seo-research", title: seoTitles.research, url: "/seo/research", icon: Search },
         { id: "seo-content", title: seoTitles.content, url: "/seo/content", icon: FileText },
+        { id: "seo-execution", title: seoTitles.execution, url: "/seo/execution", icon: Network },
       ],
     },
     {

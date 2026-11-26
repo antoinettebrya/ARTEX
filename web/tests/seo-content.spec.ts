@@ -1,11 +1,12 @@
 import { type APIResponse, expect, type Page, test } from "@playwright/test";
 
+import { executionEnabled, executionScreenshot, runExecutionFlow } from "./execution-flow";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 test.skip(
-  process.env.SEOOS_E2E_CONTENT !== "1",
+  process.env.SEOOS_E2E_CONTENT !== "1" && !executionEnabled,
   "Requires the Go API, PostgreSQL, and authorized loopback content fixtures.",
 );
 test.use({ viewport: { width: 1440, height: 900 } });
@@ -51,7 +52,7 @@ test("content studio produces an evidenced, versioned and separately approved CM
   request,
   browser,
 }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(executionEnabled ? 240_000 : 180_000);
   const api = process.env.SEOOS_API_ORIGIN;
   const token = process.env.SEOOS_E2E_TOKEN;
   if (!api || !token)
@@ -351,6 +352,13 @@ test("content studio produces an evidenced, versioned and separately approved CM
     await viewer.close();
   }
 
+  if (executionEnabled) {
+    const packageID = (await fetchWorkspace()).publications[0].id;
+    await runExecutionFlow({ page, request, base, headers, siteID, siteURL, packageID });
+    await page.getByRole("link", { name: "内容工作室", exact: true }).click();
+    await page.getByLabel("内容站点", { exact: true }).selectOption(siteID);
+  }
+
   await page.getByRole("button", { name: /^Current theme: light/u }).click();
   await expect(page.locator("html")).toHaveClass(/\bdark\b/u);
   await page
@@ -367,5 +375,12 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page.getByRole("heading", { name: "内容工作室" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await screenshot(page, "phase3-mobile-dark.png");
+  if (executionEnabled) {
+    await page.goto(`/seo/execution?site=${siteID}`);
+    await expect(page.getByRole("heading", { name: "站点执行", exact: true })).toBeVisible();
+    await expect(page.getByRole("table", { name: "站点连接", exact: true })).toContainText("Phase 4 通用 CMS 验收");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await executionScreenshot(page, "phase4-mobile-dark.png");
+  }
   expect(errors).toEqual([]);
 });

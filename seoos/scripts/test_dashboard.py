@@ -11,12 +11,14 @@ import uuid
 import smoke_test
 from research_fixture import LocalProvider
 from content_fixture import LocalContent
+from execution_fixture import LocalExecution, HOST as CMS_HOST, CMS_PREFIX
 
 
 def main():
     dsn = os.environ.get("SEOOS_TEST_DATABASE_URL")
     research = os.environ.get("SEOOS_E2E_RESEARCH") == "1"
-    content = os.environ.get("SEOOS_E2E_CONTENT") == "1"
+    execution = os.environ.get("SEOOS_E2E_EXECUTION") == "1"
+    content = os.environ.get("SEOOS_E2E_CONTENT") == "1" or execution
     if research or content:
         smoke_test.BINARY = smoke_test.ROOT / "bin" / "seoos-fixture"
     if not dsn or not smoke_test.BINARY.is_file():
@@ -26,10 +28,13 @@ def main():
     with ExitStack() as stack:
         upstream = stack.enter_context(LocalProvider()) if research or content else None
         editorial = stack.enter_context(LocalContent()) if content else None
+        integration = stack.enter_context(LocalExecution()) if execution else None
         if upstream:
             os.environ["SEOOS_DATAFORSEO_TEST_URL"] = upstream.origin
         if editorial:
             os.environ["SEOOS_CONTENT_TEST_URL"] = editorial.origin
+        if integration:
+            os.environ["SEOOS_EXECUTION_TEST_URL"] = integration.origin
         process, origin = smoke_test.start(dsn, str(uuid.uuid4()), token)
         try:
             dashboard_env = dict(
@@ -39,9 +44,15 @@ def main():
                 SEOOS_E2E_WEB_PORT=smoke_test.address().split(":")[1],
                 NEXT_TELEMETRY_DISABLED="1",
             )
+            if content:
+                dashboard_env["SEOOS_E2E_CONTENT"] = "1"
             if editorial:
                 dashboard_env["SEOOS_E2E_CONTENT_FIXTURE"] = editorial.origin
             subprocess.run(["npm", "run", "test:e2e"], cwd=smoke_test.ROOT.parent / "web", env=dashboard_env, check=True)
+            if integration:
+                calls = integration.calls
+                assert calls[(CMS_HOST, "POST", CMS_PREFIX + "/pages")] == 1, calls
+                print(f"PASS: {sum(calls.values())} execution loopback requests and exactly one CMS draft write")
             if research:
                 calls = upstream.server.calls
                 assert calls["/v3/dataforseo_labs/google/keyword_suggestions/live"] == 1, "suggestions cache was not reused"

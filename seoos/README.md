@@ -1,6 +1,6 @@
 # ARTEX SEO OS
 
-`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。参见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)、[Phase 2 关键词与 SERP 研究](../docs/seo-os/PHASE2_RESEARCH.md)及 [Phase 3 内容智能](../docs/seo-os/PHASE3_CONTENT.md)。
+`seoos/` 是独立运行的 Go 服务。它使用独立的 PostgreSQL 表、迁移、入口和 Next.js 后台。参见[产品范围](../docs/seo-os/PRODUCT_SCOPE.md)、[Phase 2 关键词与 SERP 研究](../docs/seo-os/PHASE2_RESEARCH.md)、[Phase 3 内容智能](../docs/seo-os/PHASE3_CONTENT.md)和 [Phase 4 站点执行](../docs/seo-os/PHASE4_EXECUTION.md)。
 
 ## 启动
 
@@ -32,7 +32,7 @@ Compose 包含 PostgreSQL 16，并将 API 绑定到 `127.0.0.1:8789`。数据库
 | `SEOOS_API_TOKEN` | 必填，配置组织的操作员凭据，使用随机值 |
 | `SEOOS_ORGANIZATION_NAME` | 首次建立配置组织时的名称，默认 `SEO OS` |
 | `SEOOS_ADDR` | HTTP 地址，默认 `127.0.0.1:8789` |
-| `SEOOS_PROVIDER_KEY` | 32 个随机字节的标准 Base64 编码，配置 OpenAI 或 DataForSEO 凭据时必需 |
+| `SEOOS_PROVIDER_KEY` | 32 个随机字节的标准 Base64 编码，用于加密模型、研究、CMS 和搜索平台凭据及 CMS 原始回执 |
 
 ### Next.js 后台
 
@@ -55,6 +55,8 @@ npm start -- --hostname 127.0.0.1
 
 在 `/seo/content` 使用内容工作室。该模块读取 Phase 2 研究数据和经所有者授权的站点清单，支持简报、分章节写作、独立质量审核、版本管理和发布包。参见 [Phase 3 运行手册与 API](../docs/seo-os/PHASE3_CONTENT.md)。
 
+在 `/seo/execution` 配置 WordPress、通用 CMS 和搜索平台，使用 Phase 3 审批包创建草稿，经单独授权发布并自动核验。工作台也提供索引、Sitemap、PDF 与 JavaScript 提取和优化反馈。默认容器内置 Poppler，JavaScript 使用选配的沙箱镜像。参见 [Phase 4 启动、授权、部署回滚及 API](../docs/seo-os/PHASE4_EXECUTION.md)。
+
 ## 组织、成员和权限
 
 配置操作员凭据始终绑定 `SEOOS_ORGANIZATION_ID`。数据库运营人员可通过以下命令新建组织并签发首位所有者的凭据。
@@ -75,7 +77,7 @@ Compose 部署可在 `seoos/` 执行 `docker compose exec -T api /usr/local/bin/
 
 ## API
 
-`/api/v1/` 下的端点使用 `Authorization: Bearer <凭据>`。JSON 正文上限 64 KiB，拒绝未知字段。列表端点接受 `limit=1..200` 和 `offset=0..100000`。
+`/api/v1/` 下的端点使用 `Authorization: Bearer <凭据>`。常规 JSON 正文上限 64 KiB，执行任务端点允许 6 MiB 以接收 Base64 媒体。API 拒绝未知字段。列表端点接受 `limit=1..200` 和 `offset=0..100000`。
 
 | 方法与路径 | 用途 |
 | --- | --- |

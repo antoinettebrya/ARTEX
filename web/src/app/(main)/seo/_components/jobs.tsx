@@ -13,6 +13,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { TableCell, TableRow } from "@/components/ui/table";
 import { isID, type Job, type Provider, type Site, seoRequest } from "@/lib/seo/client";
 import { contentJobLabels } from "@/lib/seo/content";
+import { executionJobLabels } from "@/lib/seo/execution";
 import { researchJobLabels } from "@/lib/seo/research";
 
 import { useSeoQuery } from "./query";
@@ -34,6 +35,7 @@ import {
 
 const jobNames = {
   ...contentJobLabels,
+  ...executionJobLabels,
   ...researchJobLabels,
   site_inventory: "站点资料快照",
   site_brief: "SEO 启动简报",

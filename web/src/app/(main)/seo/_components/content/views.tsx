@@ -2,6 +2,8 @@
 
 import { type ReactNode, useState } from "react";
 
+import Link from "next/link";
+
 import { ArrowRight, GitCompareArrows, History, Plus, RotateCcw } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -741,6 +743,15 @@ export function HistoryView({
                     {owner && (
                       <div className="flex flex-wrap items-center gap-2">
                         <DownloadPublication publication={publication} />
+                        {writable &&
+                          workspace.project.status === "prepared" &&
+                          publication.version === workspace.article_version && (
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={`/seo/execution?site=${workspace.project.site_id}&package=${publication.id}`}>
+                                <ArrowRight /> 前往站点发布
+                              </Link>
+                            </Button>
+                          )}
                         {index === 0 && writable && (
                           <Button
                             size="sm"

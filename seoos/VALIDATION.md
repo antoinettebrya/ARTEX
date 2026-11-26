@@ -118,3 +118,23 @@ canonical URL length.
 内容 E2E 加上 Phase 2 回归共发出 13 次回环 DataForSEO 请求。模型合同共 5 次回环请求，分别为大纲 1 次、章节 3 次、独立审核 1 次。固定回执给出 1374 个输入与输出 Token，按测试配置的单价结算估算费用。真实 DataForSEO、模型和正式 CMS 调用均为 0 次。正式账号的输出质量、费率与账单仍需单独验收。站点清单和更新信号要达到生产覆盖，还需实际站点、可靠索引源与分析数据接入。
 
 实测视觉范围为 1440 × 900 的浅色桌面、390 × 844 的暗色 Tangerine，以及 ARTEX 原有模式偏好回归。API、采集授权、模型预算和回退见 [Phase 3 运行手册](../docs/seo-os/PHASE3_CONTENT.md)。
+
+## Phase 4 站点接入与 SEO 执行 · 2026-11-26
+
+基线 `7eaae96a0b4c35c3cf87104634a1a33ecad2bf38`。环境为 Go 1.26.3、PostgreSQL 16.16、Node.js 24.22.1、Chrome 与 Docker Desktop。应用测试运行实际 Go API、Worker、数据库和 Next.js 生产构建。
+
+| 检查 | 实测结果 |
+| --- | --- |
+| `go test -race -count=1 ./...` | 主机 102 项顶层测试通过，包括 PostgreSQL、真实 Chromium、租约恢复、站点与组织隔离、审批与配额。主机跳过的 WordPress 与 Poppler 用例分别在下列独立容器测试中通过。 |
+| `go mod verify`、`go vet ./...`、Go 标准与测试夹具构建 | 通过。261 个运行依赖与原 ARTEX 业务模块和 Norma 隔离。 |
+| `bash scripts/test_wordpress.sh` | 本地 WordPress 7.1.5 + MariaDB 11.4。验证编辑账号 HTTPS Application Password、无效凭据拒绝、文章与页面、分类、标签、媒体、草稿、发布、实际匿名回读、同 ID 更新和恢复，以及未来预约的字段回读。Yoast / Rank Math 字段行为由固定 REST schema 测试验证。 |
+| `python3 scripts/smoke_execution.py` | Google OAuth 授权码及刷新验证通过，GSC 2 页共 1,001 条数据写入 PostgreSQL。GA4 自然流量、Bing 搜索数据和 URL 提交、索引证据与重启持久化通过。IndexNow 首次 HTTP 429，8.05 秒后重试成功，成功回执前没有提交状态。 |
+| `bash scripts/test_extraction.sh` | 6 项通过。真实 Poppler 回读 PDF 文本、页数和元数据。Chromium 在非 root、禁外网的容器沙箱中执行真实 JavaScript，并拒绝跨站和越界路径。Sitemap 发现、hreflang、lastmod、分卷与索引通过。 |
+| `python3 scripts/smoke_test.py`、`python3 scripts/load_test.py` | HTTP、认证、角色、审计和重启通过。12 路并发登记 160 站、提交 160 个库存任务均零失败，登记和提交 P95 分别为 10.0 ms 和 13.7 ms，从首个入队到全部完成 1.04 s。 |
+| `7eaae96 → 0006` 与迁移前 PostgreSQL 副本回退 | 保留已登记站点、研究快照 ID、引用该证据的内容项目。升级后能登记 CMS 连接，旧二进制从迁移前副本重启并读回原数据。 |
+| `npm run build:static`、`npm run build`、`npx tsc --noEmit`、定向 Biome | 通过，静态和生产构建各生成 41 页，17 个变更文件通过 Biome。 |
+| `SEOOS_E2E_RESEARCH=1 SEOOS_E2E_CONTENT=1 SEOOS_E2E_EXECUTION=1 python3 scripts/test_dashboard.py` | Chrome 4 项通过。覆盖真实审批包、独立发布授权、自动回读、手动复核、回滚、媒体、XML 下载、多站点 OAuth 回调恢复原站点、Search Console 筛选、URL Inspection 和窄屏主题。 |
+
+搜索 HTTP 冒烟共 25 次已计量的回环 API 请求，覆盖 OAuth、GSC、GA4、Bing 和 IndexNow。浏览器用例发送 33 次 Phase 4 回环请求，其中只有一次 CMS 草稿创建。同期的研究和编辑夹具分别收到 13 次和 5 次请求，固定回执记录 1,374 Token，估算为 1,768 USD micros。真实外部 API 调用和实际费用均为 0。正式外部账号权限、配额、账单、真实行业数据、WordPress 插件版本和原生定时任务运行仍待授权环境验收。160 站数据为站点库存负载实测。全仓 Biome lint 仍有基线 84 项。
+
+[API、部署与回滚](../docs/seo-os/PHASE4_EXECUTION.md) · [CMS 契约与容器测试](internal/executioncms/README.md) · [搜索服务商合同与授权](internal/executionsearch/README.md)

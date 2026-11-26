@@ -14,6 +14,25 @@ const snapshotPath = new RegExp(`^/research/snapshots/${ID}$`);
 const contentProjectPath = new RegExp(`^/content/projects/${ID}$`);
 const contentActionPath = new RegExp(`^/content/projects/${ID}/actions$`);
 const contentPagePath = new RegExp(`^/content/inventory/${ID}$`);
+const executionConnectionPath = new RegExp(`^/execution/connections/${ID}$`);
+const executionPublicationPath = new RegExp(`^/execution/publications/${ID}$`);
+const executionSitemapPath = new RegExp(`^/execution/sitemaps/${ID}$`);
+const executionLists = new Set([
+  "/execution/connections",
+  "/execution/packages",
+  "/execution/publications",
+  "/execution/jobs",
+  "/execution/pages",
+  "/execution/media",
+  "/execution/properties",
+  "/execution/metrics",
+  "/execution/index",
+  "/execution/submissions",
+  "/execution/sitemaps",
+  "/execution/extractions",
+  "/execution/usage",
+  "/execution/feedback",
+]);
 const researchLists = new Set([
   "/research/seeds",
   "/research/suggestions",
@@ -40,6 +59,7 @@ const contentLists = new Set([
 const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/seo", maxAge: 8 * 60 * 60 } as const;
 const maxBodyBytes = 64 * 1024;
+const maxExecutionJobBodyBytes = 6 * 1024 * 1024;
 
 function problem(status: number, code: string) {
   return NextResponse.json({ error: { code } }, { status, headers });
@@ -53,6 +73,9 @@ function permits(path: string, method: string): boolean {
         lists.has(path) ||
         researchLists.has(path) ||
         contentLists.has(path) ||
+        executionLists.has(path) ||
+        executionPublicationPath.test(path) ||
+        executionSitemapPath.test(path) ||
         path === "/me" ||
         path === "/audit" ||
         sitePath.test(path) ||
@@ -68,6 +91,11 @@ function permits(path: string, method: string): boolean {
         path === "/research/pages" ||
         path === "/content/projects" ||
         path === "/content/jobs" ||
+        path === "/execution/connections" ||
+        path === "/execution/publications" ||
+        path === "/execution/jobs" ||
+        path === "/execution/oauth/start" ||
+        path === "/execution/oauth/exchange" ||
         contentActionPath.test(path) ||
         memberTokenPath.test(path)
       );
@@ -77,7 +105,8 @@ function permits(path: string, method: string): boolean {
         providerPath.test(path) ||
         memberRolePath.test(path) ||
         path === "/content/crawl" ||
-        path === "/content/models"
+        path === "/content/models" ||
+        executionConnectionPath.test(path)
       );
     case "DELETE":
       return jobPath.test(path) || memberTokenPath.test(path);
@@ -104,7 +133,7 @@ class BodyError extends Error {
   }
 }
 
-async function readBody(request: NextRequest): Promise<string> {
+async function readBody(request: NextRequest, limit = maxBodyBytes): Promise<string> {
   if (request.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
     throw new BodyError(415, "unsupported_media_type");
   }
@@ -118,7 +147,7 @@ async function readBody(request: NextRequest): Promise<string> {
       const chunk = await reader.read();
       if (chunk.done) return body + decoder.decode();
       size += chunk.value.byteLength;
-      if (size > maxBodyBytes) {
+      if (size > limit) {
         await reader.cancel();
         throw new BodyError(413, "body_too_large");
       }
@@ -194,7 +223,8 @@ export async function seoProxy(request: NextRequest, origin: string, path: strin
     const token = request.cookies.get(SESSION_COOKIE)?.value;
     if (!token || !ACCEPTED_TOKEN.test(token)) return problem(401, "unauthorized");
     const expectsBody = (method === "POST" || method === "PUT") && !memberTokenPath.test(path);
-    const body = expectsBody ? await readBody(request) : undefined;
+    const bodyLimit = path === "/execution/jobs" ? maxExecutionJobBodyBytes : maxBodyBytes;
+    const body = expectsBody ? await readBody(request, bodyLimit) : undefined;
     const response = await upstream(origin, path + request.nextUrl.search, token, method, body);
     const contentType = response.headers.get("Content-Type");
     return new NextResponse(response.body, {

@@ -94,7 +94,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	handler, err := api.NewHandler(repo, cfg.OrganizationID, cfg.APIToken)
+	execution, err := newExecutionServices()
+	if err != nil {
+		return err
+	}
+	handler, err := api.NewHandler(repo, cfg.OrganizationID, cfg.APIToken, execution.Fixture)
 	if err != nil {
 		return errors.New("invalid SEO HTTP configuration")
 	}
@@ -111,7 +115,7 @@ func run() error {
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
-		worker.Run(ctx, repo, researchProvider, content)
+		worker.Run(ctx, repo, researchProvider, content, execution)
 	}()
 	defer func() {
 		stop()
