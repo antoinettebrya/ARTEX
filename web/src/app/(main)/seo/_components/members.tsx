@@ -89,7 +89,7 @@ export function Members() {
 
   return (
     <PageFrame
-      title="成员管理"
+      title="成员与权限"
       description="管理组织角色和访问凭据。"
       actions={
         <Button variant="outline" size="sm" onClick={() => setAdd(true)}>

@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { seoPages } from "../src/lib/seo/routes";
 import { join } from "node:path";
 
 function testCredentials() {
@@ -14,7 +15,7 @@ async function signIn(page: Page, token: string) {
   const credential = page.getByLabel("访问凭据", { exact: true });
   await credential.fill(token);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "运营总览", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运营仪表盘", level: 1 })).toBeVisible();
 }
 
 async function showGroup(page: Page, group: string) {
@@ -58,7 +59,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "访问凭据无效或已撤销。" })).toBeVisible();
   await signIn(page, token);
-  await openNavigation(page, "Sites", "全部站点");
+  await openNavigation(page, "站点管理", "全部站点");
   const cookie = (await page.context().cookies()).find((c) => c.name === "artex_seo_session");
   expect(cookie?.httpOnly).toBe(true);
   expect(cookie?.secure).toBe(true);
@@ -112,7 +113,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   await expect(page.getByRole("dialog").locator("pre")).toContainText("dashboard.example.test");
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
 
-  await openNavigation(page, "AI & System", "AI Provider");
+  await openNavigation(page, "AI 与系统", "大模型服务商");
   await page.getByRole("button", { name: "添加大模型" }).click();
   let provider = page.getByRole("dialog", { name: "添加大模型" });
   await provider.getByLabel("名称", { exact: true }).fill("后台测试配置");
@@ -151,7 +152,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
     await expect(savedProvider.getByRole("status")).toContainText("在厂商处查不到该模型");
   }
 
-  await openNavigation(page, "AI & System", "成员管理");
+  await openNavigation(page, "AI 与系统", "成员与权限");
   await page.getByRole("button", { name: "添加成员" }).click();
   const adding = page.getByRole("dialog", { name: "添加成员" });
   await adding.getByLabel("邮箱").fill("dashboard-viewer@example.test");
@@ -172,11 +173,11 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
   const viewer = await browser.newPage({ baseURL: page.url() });
   try {
     await signIn(viewer, viewerToken);
-    await openNavigation(viewer, "Sites", "全部站点");
+    await openNavigation(viewer, "站点管理", "全部站点");
     await expect(viewer.getByText(`${name}（已更新）`, { exact: true })).toBeVisible();
     await expect(viewer.getByRole("button", { name: "添加站点" })).toHaveCount(0);
-    const viewerSystem = await showGroup(viewer, "AI & System");
-    await expect(viewerSystem.getByRole("link", { name: "成员管理", exact: true })).toHaveCount(0);
+    const viewerSystem = await showGroup(viewer, "AI 与系统");
+    await expect(viewerSystem.getByRole("link", { name: "成员与权限", exact: true })).toHaveCount(0);
     await expect(viewerSystem.getByRole("link", { name: "审计日志", exact: true })).toHaveCount(0);
     await viewer.goto("/seo/audit");
     await expect(viewer.getByText("审计日志需要所有者权限")).toBeVisible();
@@ -209,7 +210,7 @@ test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, 
 
 test("OpenAI Compatible capabilities persist and URL changes require a new credential", async ({ page }) => {
   await signIn(page, testCredentials().token);
-  await openNavigation(page, "AI & System", "AI Provider");
+  await openNavigation(page, "AI 与系统", "大模型服务商");
   await page.getByRole("button", { name: "添加大模型" }).click();
   let dialog = page.getByRole("dialog", { name: "添加大模型" });
   await dialog.getByLabel("模型厂商").selectOption("openai_compatible");
@@ -280,7 +281,7 @@ test("WordPress installation can be edited within its registered HTTPS site", as
   const secureURL = "https://wordpress-form.example.test/blog";
   const secure = await register("WordPress HTTPS fixture", secureURL);
   await signIn(page, token);
-  await openNavigation(page, "Sites", "CMS 连接");
+  await openNavigation(page, "站点管理", "CMS 连接");
   const sites = page.getByLabel("执行站点", { exact: true });
   await expect(sites).toBeVisible();
   async function fillConnection(site: string) {
@@ -364,20 +365,20 @@ test("ARTEX theme presets, font persistence, search, and mobile sidebar work in 
   await page.getByRole("option", { name: "Geist Mono", exact: true }).click();
   await expect(root).toHaveAttribute("data-font", "geistMono");
   await page.reload();
-  await expect(page.getByRole("heading", { name: "运营总览", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运营仪表盘", level: 1 })).toBeVisible();
   await expect(root).toHaveAttribute("data-theme-preset", "tangerine");
   await expect(root).toHaveAttribute("data-font", "geistMono");
   await expect(root).toHaveClass(/\bdark\b/);
 
   await page.getByRole("button", { name: /^Search/ }).click();
-  await page.getByRole("option", { name: /AI Provider$/u }).click();
-  await expect(page.getByRole("heading", { name: "AI Provider", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: /大模型服务商$/u }).click();
+  await expect(page.getByRole("heading", { name: "大模型服务商", exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("tab", { name: "DataForSEO 数据源" }).click();
   await expect(page.getByRole("table", { name: "DataForSEO 数据源" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await openNavigation(page, "Sites", "全部站点");
+  await openNavigation(page, "站点管理", "全部站点");
   await expect(page.locator('[data-mobile="true"][data-sidebar="sidebar"]')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole("button", { name: "添加站点" }).click();
@@ -397,18 +398,18 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   const headers = { Authorization: `Bearer ${token}` };
   const output = process.env.SEOOS_E2E_IA_SCREENSHOTS;
   const workspace = [
-    { group: "Dashboard", title: "运营总览", path: "/seo/dashboard", file: "01-Dashboard" },
-    { group: "Sites", title: "站点配置", path: "/seo/sites/settings", file: "02-Sites" },
-    { group: "Research", title: "关键词研究", path: "/seo/research", file: "03-Research" },
-    { group: "Content", title: "内容项目", path: "/seo/content", file: "04-Content" },
-    { group: "Execution", title: "CMS 管理", path: "/seo/execution/cms", file: "05-Execution" },
-    { group: "AI & System", title: "AI Provider", path: "/seo/system/providers", file: "06-AI-System" },
+    { group: "运营总览", title: "运营仪表盘", path: "/seo/dashboard", file: "01-Dashboard" },
+    { group: "站点管理", title: "站点配置", path: "/seo/sites/settings", file: "02-Sites" },
+    { group: "SEO 研究", title: "关键词研究", path: "/seo/research", file: "03-Research" },
+    { group: "内容中心", title: "内容项目", path: "/seo/content", file: "04-Content" },
+    { group: "SEO 执行", title: "发布中心", path: "/seo/execution/publishing", file: "05-Execution" },
+    { group: "AI 与系统", title: "大模型服务商", path: "/seo/system/providers", file: "06-AI-System" },
   ];
   async function ready(visit: Page, path: string) {
     const tableNames: Record<string, string> = {
       "/seo/research": "种子关键词",
       "/seo/content": "内容项目列表",
-      "/seo/execution/cms": "CMS 页面与文章",
+      "/seo/execution/publishing": "CMS 发布记录",
       "/seo/system/providers": "大模型服务",
     };
     const table = tableNames[path];
@@ -419,15 +420,15 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
 
-  async function site(name: string, domain: string, status: "active" | "paused") {
+  async function site(name: string, domain: string, status: "active" | "paused", country = "US", language = "en-US") {
     const reply = await request.post(`${api}/api/v1/sites`, {
       headers,
       data: {
         name,
         base_url: `https://${domain}.example.test`,
         cms: "wordpress",
-        country_code: "US",
-        language_tag: "en-US",
+        country_code: country,
+        language_tag: language,
         status,
       },
     });
@@ -436,7 +437,7 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   }
 
   const active = await site("信息架构 · 文档站", "ia-docs", "active");
-  const paused = await site("信息架构 · 已暂停站点", "ia-paused", "paused");
+  const paused = await site("信息架构 · 已暂停站点", "ia-paused", "paused", "FR", "fr-FR");
   const inventory = await request.post(`${api}/api/v1/jobs`, {
     headers,
     data: { site_id: active.id, kind: "site_inventory", idempotency_key: "ia-dashboard-inventory" },
@@ -449,24 +450,115 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await signIn(page, token);
+  const topLevel = ["运营总览", "站点管理", "SEO 研究", "内容中心", "SEO 执行", "AI 与系统"];
+  const sections = [
+    ["运营仪表盘", "站群健康", "待处理事项", "最近活动"],
+    ["全部站点", "站群分组", "CMS 连接", "站点配置", "内容资产清单"],
+    ["关键词研究", "关键词拓展", "关键词聚类", "搜索意图分析", "SERP 竞争分析", "关键词与页面映射", "关键词机会评分"],
+    ["内容项目", "内容策略", "内容简报", "研究与资料来源", "文章编辑", "事实核验", "质量审核", "版本管理", "旧文优化"],
+    [
+      "发布中心",
+      "站内链接（规划）",
+      "站群互链（规划）",
+      "技术 SEO",
+      "索引管理",
+      "站点地图",
+      "索引提交",
+      "谷歌搜索数据",
+      "谷歌流量分析",
+      "必应站长工具",
+      "执行任务",
+    ],
+    [
+      "AI 图片工作室（规划）",
+      "WordPress 主题工厂（规划）",
+      "大模型服务商",
+      "AI Agent 管理（规划）",
+      "自动化工作流（规划）",
+      "任务中心",
+      "成员与权限",
+      "审计日志",
+      "系统设置（规划）",
+    ],
+  ];
+  const mainSidebar = page.locator('[data-sidebar="sidebar"]:visible');
+  await expect(
+    mainSidebar.locator('[data-slot="sidebar-content"] [data-sidebar="menu-button"][aria-expanded]'),
+  ).toHaveText(topLevel);
+  for (const [index, name] of topLevel.entries()) {
+    const group = await showGroup(page, name);
+    const button = group.getByRole("button", { name, exact: true });
+    await expect(button.locator("xpath=ancestor::li[1]").getByRole("link")).toHaveText(sections[index]);
+    if (name !== "运营总览") await button.click();
+  }
+  const allMetrics = page.locator('[aria-label="组织运营指标"]');
+  await expect(allMetrics.getByText("网站总数", { exact: true }).locator("..").locator("dd").first()).toHaveText(
+    /^\d+$/u,
+  );
+  expect(
+    Number(await allMetrics.getByText("网站总数", { exact: true }).locator("..").locator("dd").first().textContent()),
+  ).toBeGreaterThanOrEqual(2);
+  await page.getByRole("button", { name: "站点范围", exact: true }).click();
+  const popover = page.locator('[data-slot="popover-content"]');
+  await popover.getByLabel("站群分组", { exact: true }).selectOption("FR:fr-FR");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("site_group") === "FR:fr-FR" && url.searchParams.get("site_id") === "all",
+  );
+  await expect(popover.getByLabel("全局站点", { exact: true }).locator("option")).toHaveText(["全部站点", paused.name]);
+  await popover.getByLabel("国家或地区", { exact: true }).selectOption("US");
+  await popover.getByLabel("语言", { exact: true }).selectOption("en-US");
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("site_country") === "US" &&
+      url.searchParams.get("site_language") === "en-US" &&
+      !url.searchParams.has("site_group"),
+  );
+  await expect(
+    popover.getByLabel("全局站点", { exact: true }).locator("option").filter({ hasText: paused.name }),
+  ).toHaveCount(0);
+  if (output) await page.screenshot({ path: join(output, "desktop-site-scope.png"), animations: "disabled" });
+  await popover.getByRole("button", { name: "设置研究市场", exact: true }).click();
+  const globalMarket = page.getByRole("dialog", { name: "筛选市场", exact: true });
+  await globalMarket.getByLabel("国家或地区").fill("US");
+  await globalMarket.getByLabel("语言代码").fill("en");
+  await globalMarket.getByLabel("DataForSEO 地区代码").fill("2840");
+  await globalMarket.getByLabel("设备", { exact: true }).selectOption("mobile");
+  await globalMarket.getByRole("button", { name: "应用筛选", exact: true }).click();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("location_code") === "2840" &&
+      url.searchParams.get("device") === "mobile" &&
+      url.searchParams.get("site_country") === "US",
+  );
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  await page.getByRole("button", { name: "SEO 研究", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "关键词拓展", exact: true })).toBeVisible();
+  if (output) await page.screenshot({ path: join(output, "desktop-collapsed-navigation.png"), animations: "disabled" });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
   const selector = page.getByLabel("统计站点", { exact: true });
-  await page.goto(`/seo/dashboard?site=${active.id}`);
+  await page.goto(`/seo/dashboard?site_id=${active.id}`);
   await expect(selector).toHaveValue(active.id);
-  await expect(page.getByRole("heading", { name: `${active.name} · 站点运营`, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SEO 表现", exact: true })).toBeVisible();
   const overview = page.locator('[aria-label="组织运营指标"]');
   const metric = (label: string) => overview.getByText(label, { exact: true }).locator("..").locator("dd").first();
-  await expect(metric("管理站点数量")).toHaveText(/^\d+$/u);
-  expect(Number(await metric("管理站点数量").textContent())).toBeGreaterThanOrEqual(2);
+  await expect(metric("网站总数")).toHaveText(/^\d+$/u);
+  await expect(metric("网站总数")).toHaveText("1");
   await expect(metric("今日执行任务")).toHaveText(/^\d+$/u);
   expect(Number(await metric("今日执行任务").textContent())).toBeGreaterThanOrEqual(1);
-  const search = page.locator('[aria-label="站点运营指标"]');
-  await expect(search.getByText("GSC 点击", { exact: true }).locator("..")).toContainText("暂无数据");
-  await expect(search.getByText("自然搜索流量", { exact: true }).locator("..")).toContainText(
-    "暂无同步的 GA4 自然搜索数据",
-  );
+  const search = page.locator('[aria-label="站点搜索指标"]');
+  await expect(search.getByText("GSC 点击", { exact: true }).locator("..")).toContainText("未连接");
+  await expect(search.getByText("自然搜索流量", { exact: true }).locator("..")).toContainText("未连接");
 
+  const requestNewSite = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/seo/api/execution/connections" && url.searchParams.get("site_id") === paused.id;
+  });
   await selector.selectOption(paused.id);
-  await expect(page).toHaveURL((url) => url.searchParams.get("site") === paused.id);
+  await requestNewSite;
+  await expect(page).toHaveURL((url) => url.searchParams.get("site_id") === paused.id);
+  await expect(metric("今日执行任务")).toHaveText("0");
   await page.goBack();
   await expect(selector).toHaveValue(active.id);
   await page.goForward();
@@ -475,7 +567,7 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
 
   for (const item of workspace) {
     await openNavigation(page, item.group, item.title);
-    await expect(page).toHaveURL((url) => url.pathname === item.path && url.searchParams.get("site") === active.id);
+    await expect(page).toHaveURL((url) => url.pathname === item.path && url.searchParams.get("site_id") === active.id);
     await expect(
       page.locator('[data-sidebar="sidebar"]:visible').getByRole("link", { name: item.title, exact: true }),
     ).toHaveAttribute("aria-current", "page");
@@ -489,23 +581,23 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
     .getByRole("link", { name: /ARTEX SEO OS/u })
     .click();
   await expect(page).toHaveURL(
-    (url) => url.pathname === "/seo/dashboard" && url.searchParams.get("site") === active.id,
+    (url) => url.pathname === "/seo/dashboard" && url.searchParams.get("site_id") === active.id,
   );
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "AI Provider", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "大模型服务商", level: 1 })).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "CMS 管理", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "发布中心", level: 1 })).toBeVisible();
   await page.goForward();
-  await expect(page.getByRole("heading", { name: "AI Provider", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "大模型服务商", level: 1 })).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(
-    (url) => url.pathname === "/seo/system/providers" && url.searchParams.get("site") === active.id,
+    (url) => url.pathname === "/seo/system/providers" && url.searchParams.get("site_id") === active.id,
   );
   await page.goto("/seo/dashboard/health");
   const health = page.getByRole("table", { name: "站群健康" });
   await expect(health.getByRole("row").filter({ hasText: active.name })).toContainText("完成");
   await expect(health.getByRole("row").filter({ hasText: paused.name })).toContainText("暂停");
-  await page.goto("/seo/dashboard/inbox");
+  await page.goto(`/seo/dashboard/inbox?site_id=${active.id}`);
   await expect(page.getByRole("table", { name: "失败任务" })).toBeVisible();
   await expect(page.getByRole("table", { name: "待审核文章" })).toBeVisible();
   await page.goto("/seo/dashboard/activity");
@@ -519,6 +611,11 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   await expect(page.getByRole("heading", { name: "WordPress 主题工厂", level: 1 })).toBeVisible();
   await expect(page.getByText("尚未开放", { exact: true })).toBeVisible();
 
+  const unsupportedAdmin = await request.post(`${api}/api/v1/members`, {
+    headers,
+    data: { role: "admin", email: "ui-unsupported-admin@example.test" },
+  });
+  expect(unsupportedAdmin.status()).toBe(400);
   const editor = await request.post(`${api}/api/v1/members`, {
     headers,
     data: { role: "editor", email: "ia-editor@example.test" },
@@ -527,16 +624,16 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   const member = await editor.json();
   const editorPage = await browser.newPage({ baseURL });
   try {
-    await editorPage.goto(`/seo/sites/settings?site=${paused.id}`);
+    await editorPage.goto(`/seo/sites/settings?site_id=${paused.id}`);
     await expect(editorPage.getByRole("heading", { name: "登录运营后台" })).toBeVisible();
     await editorPage.getByLabel("访问凭据", { exact: true }).fill(member.token);
     await editorPage.getByRole("button", { name: "登录", exact: true }).click();
     await expect(editorPage).toHaveURL(
-      (url) => url.pathname === "/seo/sites/settings" && url.searchParams.get("site") === paused.id,
+      (url) => url.pathname === "/seo/sites/settings" && url.searchParams.get("site_id") === paused.id,
     );
     await expect(editorPage.getByRole("button", { name: "编辑站点配置" })).toBeVisible();
-    const editorNavigation = await showGroup(editorPage, "AI & System");
-    await expect(editorNavigation.getByRole("link", { name: "成员管理" })).toHaveCount(0);
+    const editorNavigation = await showGroup(editorPage, "AI 与系统");
+    await expect(editorNavigation.getByRole("link", { name: "成员与权限" })).toHaveCount(0);
     await editorPage.goto("/seo/system/audit");
     await expect(editorPage.getByText("审计日志需要所有者权限")).toBeVisible();
   } finally {
@@ -552,17 +649,19 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
   try {
     const phone = await mobile.newPage();
     await signIn(phone, token);
-    await phone.goto(`/seo/dashboard?site=${active.id}`);
+    await phone.goto(`/seo/dashboard?site_id=${active.id}`);
     await expect(phone.getByLabel("统计站点", { exact: true })).toHaveValue(active.id);
     await phone.getByRole("button", { name: /^Current theme: light/ }).click();
     await expect(phone.locator("html")).toHaveClass(/\bdark\b/u);
-    const menu = await showGroup(phone, "Dashboard");
+    const menu = await showGroup(phone, "运营总览");
     if (output) await phone.screenshot({ path: join(output, "mobile-sidebar.png"), animations: "disabled" });
-    await menu.getByRole("button", { name: "Dashboard", exact: true }).press("Escape");
+    await menu.getByRole("button", { name: "运营总览", exact: true }).press("Escape");
     await expect(phone.locator('[data-mobile="true"][data-sidebar="sidebar"]')).toHaveCount(0);
     for (const item of workspace) {
       await openNavigation(phone, item.group, item.title);
-      await expect(phone).toHaveURL((url) => url.pathname === item.path && url.searchParams.get("site") === active.id);
+      await expect(phone).toHaveURL(
+        (url) => url.pathname === item.path && url.searchParams.get("site_id") === active.id,
+      );
       await expect(phone.locator('[data-mobile="true"][data-sidebar="sidebar"]')).toHaveCount(0);
       expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
       await ready(phone, item.path);
@@ -574,10 +673,39 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
         });
     }
     await phone.reload();
-    await expect(phone.getByRole("heading", { name: "AI Provider", level: 1 })).toBeVisible();
+    await expect(phone.getByRole("heading", { name: "大模型服务商", level: 1 })).toBeVisible();
     await expect(phone.locator("html")).toHaveClass(/\bdark\b/u);
   } finally {
     await mobile.close();
+  }
+  expect(errors).toEqual([]);
+});
+
+test("every registered SEO page opens directly on the production web build", async ({ page, request }) => {
+  test.setTimeout(140_000);
+  const { api, token } = testCredentials();
+  const provisioned = await request.post(`${api}/api/v1/sites`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: "UI 2.0 路由验收站点",
+      base_url: "https://ui2-route-matrix.example.test",
+      cms: "generic",
+      country_code: "JP",
+      language_tag: "ja-JP",
+    },
+  });
+  expect(provisioned.status()).toBe(201);
+  const { site } = await provisioned.json();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await signIn(page, token);
+  const paths = new Set(seoPages.map(({ path }) => path));
+  expect(paths.size).toBe(56);
+  for (const entry of seoPages) {
+    const response = await page.goto(`${entry.path}?site_id=${site.id}`, { waitUntil: "domcontentloaded" });
+    expect(response?.status(), entry.path).toBe(200);
+    await expect(page.getByRole("heading", { name: entry.title, exact: true, level: 1 })).toBeVisible();
+    if (entry.planned) await expect(page.getByText("尚未开放", { exact: true })).toBeVisible();
   }
   expect(errors).toEqual([]);
 });

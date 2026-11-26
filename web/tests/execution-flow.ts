@@ -17,7 +17,11 @@ export async function executionScreenshot(page: Page, file: string) {
   await mkdir(output, { recursive: true });
   await expect(page.locator("[data-sonner-toast]").filter({ visible: true })).toHaveCount(0, { timeout: 8000 });
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await page.screenshot({ path: join(output, file), animations: "disabled" });
+  await page.screenshot({
+    path: join(output, file),
+    animations: "disabled",
+    fullPage: file === "phase4-dashboard-data.png",
+  });
 }
 
 export async function runExecutionFlow({
@@ -38,7 +42,7 @@ export async function runExecutionFlow({
   packageID: string;
 }) {
   const title = "Phase 4 通用 CMS 验收";
-  const open = (path: string) => page.goto(`${path}?site=${siteID}`);
+  const open = (path: string) => page.goto(`${path}?site_id=${siteID}`);
 
   async function awaitJob(id: string, name: string, expected = "succeeded") {
     let final: { state: string; error_code?: string; result?: { verification_job_id?: string } } | undefined;
@@ -120,7 +124,7 @@ export async function runExecutionFlow({
   await expect(page).toHaveURL(
     (url) =>
       url.pathname === "/seo/execution/publishing" &&
-      url.searchParams.get("site") === siteID &&
+      url.searchParams.get("site_id") === siteID &&
       url.searchParams.get("package") === packageID,
   );
   await page.reload();
@@ -196,10 +200,16 @@ export async function runExecutionFlow({
   expect(verified.publication.url).toBe(`${siteURL}/existing`);
   expect(verified.publication.target_id).toBe(first.publication.target_id);
   await executionScreenshot(page, "phase4-publishing-verified.png");
+  await open("/seo/execution/publications");
+  await expect(record).toContainText("已核验");
+  await open("/seo/execution/verification");
+  await expect(record.getByRole("button", { name: "核验发布", exact: true })).toBeVisible();
+  await expect(record.getByRole("button", { name: "恢复版本", exact: true })).toHaveCount(0);
+
   await open("/seo/dashboard");
   const totals = page.locator('[aria-label="站点运营指标"]');
   const metric = (label: string) => totals.getByText(label, { exact: true }).locator("..").locator("dd").first();
-  await expect(metric("发布成功数量")).toHaveText("1");
+  await expect(metric("已发布文章")).toHaveText("1");
   await expect(metric("内容生产数量")).toHaveText("1");
   await open("/seo/execution/publishing");
 
@@ -264,7 +274,7 @@ export async function runExecutionFlow({
     "API 密钥": indexNowKey,
   });
   await open("/seo/execution/indexnow");
-  await expect(page.getByRole("heading", { name: "IndexNow", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "索引提交", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "检查 URL", exact: true })).toHaveCount(0);
   await page.getByLabel("提交连接", { exact: true }).selectOption(indexNow.id);
   await page.getByRole("button", { name: "提交索引请求", exact: true }).click();
@@ -332,7 +342,7 @@ export async function runExecutionFlow({
       .click();
     expect((await exchanged).ok(), "exchange approved fixture Google authorization").toBe(true);
     await expect(page).toHaveURL(
-      (url) => url.pathname === "/seo/sites/connections" && url.search === `?site=${siteID}`,
+      (url) => url.pathname === "/seo/sites/connections" && url.search === `?site_id=${siteID}`,
     );
     await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
   }
@@ -357,16 +367,16 @@ export async function runExecutionFlow({
   await executionScreenshot(page, "phase4-search-console.png");
 
   const sources = page.getByRole("navigation", { name: "搜索分析来源", exact: true });
-  await sources.getByRole("link", { name: "GA4", exact: true }).click();
+  await sources.getByRole("link", { name: "谷歌流量分析", exact: true }).click();
   await expect(page.getByRole("table", { name: "GA4 自然搜索指标", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(
-    (url) => url.pathname === "/seo/execution/analytics" && url.searchParams.get("site") === siteID,
+    (url) => url.pathname === "/seo/execution/analytics" && url.searchParams.get("site_id") === siteID,
   );
   await expect(metrics).toContainText("phase4 organic query");
   await page.goForward();
   await expect(page).toHaveURL(
-    (url) => url.pathname === "/seo/execution/ga4" && url.searchParams.get("site") === siteID,
+    (url) => url.pathname === "/seo/execution/ga4" && url.searchParams.get("site_id") === siteID,
   );
   await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
 
@@ -393,10 +403,34 @@ export async function runExecutionFlow({
   await ga4Report.getByLabel("结束日期", { exact: true }).fill(reportDay);
   await submitTask("同步 Google Analytics 4");
   await open("/seo/dashboard");
-  await expect(metric("GSC 点击")).toHaveText("12,012");
-  await expect(metric("GSC 展示")).toHaveText("84,084");
-  await expect(metric("自然搜索流量")).toHaveText("17");
+  const searchTotals = page.locator('[aria-label="站点搜索指标"]');
+  const searchMetric = (label: string) =>
+    searchTotals.getByText(label, { exact: true }).locator("..").locator("dd").first();
+  await expect(searchMetric("GSC 点击")).toHaveText("12,012");
+  await expect(searchMetric("GSC 点击率")).toHaveText("14.3%");
+  await expect(searchMetric("GSC 平均排名")).toHaveText("6.5");
+  await expect(searchMetric("已索引 URL")).toHaveText("1");
+  await expect(searchMetric("GSC 展示")).toHaveText("84,084");
+  await expect(searchMetric("自然搜索流量")).toHaveText("17");
+  const organization = page.locator('[aria-label="组织运营指标"]');
+  await expect(organization.getByText("CMS 连接失败", { exact: true }).locator("..").locator("dd").first()).toHaveText(
+    "0",
+  );
+  const ai = page.locator('[aria-label="AI 运营指标"]');
+  for (const label of [
+    "模型调用量",
+    "Token 使用量",
+    "模型费用",
+    "DataForSEO 费用",
+    "模型每日预算使用率",
+    "数据每日预算使用率",
+  ]) {
+    await expect(ai.getByText(label, { exact: true }).locator("..").locator("dd").first()).toHaveText(/^[\d$]/u);
+  }
   await executionScreenshot(page, "phase4-dashboard-data.png");
+  await open("/seo/execution/logs");
+  await expect(page.getByRole("table", { name: "执行事件", exact: true })).toContainText("execution.connection.save");
+  await executionScreenshot(page, "phase4-execution-logs.png");
 
   for (const [path, table] of [
     ["/seo/execution/ga4", "GA4 自然搜索指标"],

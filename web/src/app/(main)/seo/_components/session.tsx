@@ -13,7 +13,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { errorMessage, type Principal, roles, SeoAPIError, seoRequest } from "@/lib/seo/client";
 import { SEO_HOME, safeSeoReturn, seoGroups, seoHref } from "@/lib/seo/routes";
 
+import { SeoSiteProvider } from "./context";
 import { useSeoQuery } from "./query";
+import { SeoScopeControl } from "./scope-control";
 
 const SessionContext = createContext<{ principal: Principal; refresh: () => void } | null>(null);
 
@@ -77,17 +79,20 @@ export function SeoSession({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={{ principal, refresh }}>
-      <AppShell
-        user={user}
-        navigation={{
-          home: seoHref(SEO_HOME, pathname, params),
-          title: "ARTEX SEO OS",
-          groups: seoGroups(principal.role, pathname, params),
-          onLogout: logOut,
-        }}
-      >
-        {children}
-      </AppShell>
+      <SeoSiteProvider key={principal.organization_id}>
+        <AppShell
+          user={user}
+          navigation={{
+            home: seoHref(SEO_HOME, pathname, params),
+            title: "ARTEX SEO OS",
+            groups: seoGroups(principal.role, pathname, params),
+            onLogout: logOut,
+            scopeControl: <SeoScopeControl />,
+          }}
+        >
+          {children}
+        </AppShell>
+      </SeoSiteProvider>
     </SessionContext.Provider>
   );
 }

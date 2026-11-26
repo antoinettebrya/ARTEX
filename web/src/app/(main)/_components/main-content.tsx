@@ -6,8 +6,8 @@ import { usePathname } from "next/navigation";
 
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import type { CurrentUser } from "@/lib/auth";
 import { api } from "@/lib/api";
+import type { CurrentUser } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 import type { ShellNavigation } from "./app-shell";
@@ -79,6 +79,7 @@ export function MainContent({
               <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>
             )}
             {!inSEO && <UpdateBadge />}
+            {navigation?.scopeControl}
             <LayoutControls />
             <ThemeSwitcher />
             <AccountSwitcher users={[user]} onLogout={navigation?.onLogout} />

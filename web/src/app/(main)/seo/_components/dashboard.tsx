@@ -13,11 +13,12 @@ import { type DashboardView, seoRoutes } from "@/lib/seo/routes";
 
 import { SiteSelector, useSeoLocation, useSiteScope } from "./context";
 import {
+  latestJobBySite,
   loadContentProgress,
-  loadDailyCost,
+  loadDailyAI,
   loadDailyJobs,
+  loadIndexStatus,
   loadPublished,
-  loadRemainingSites,
   loadSearchReports,
   utcDay,
 } from "./dashboard-data";
@@ -32,7 +33,7 @@ import {
   PageSkeleton,
   RecordsTable,
   StateBadge,
-  useSeoList,
+  useLocalSeoRecords,
 } from "./shared";
 import { siteStates } from "./sites";
 
@@ -40,10 +41,12 @@ const descriptions = {
   overview: "查看组织运营指标和当前站点的内容、发布与搜索数据。",
   health: "查看站点登记状态与最近 200 条队列任务中各站的最新结果。",
   inbox: "处理今日失败任务和当前站点通过质量检查后待人工审核的文章。",
-  activity: "按创建时间浏览当前组织的任务活动。",
+  activity: "在当前范围内查看最近 200 条组织任务中的活动。",
 };
 
 const integer = new Intl.NumberFormat("zh-CN");
+const decimal = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
+const budgetPercent = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 4 });
 const percent = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 });
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 6 });
 
@@ -95,10 +98,10 @@ function ScopedSelection({ scope }: { scope: ReturnType<typeof useSiteScope> }) 
       )}
       {scope.loading && <PageSkeleton />}
       {scope.error !== undefined && <LoadError error={scope.error} retry={scope.refresh} />}
-      {!scope.site && !scope.loading && scope.error === undefined && (
+      {!scope.rows.length && !scope.loading && scope.error === undefined && (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>暂无登记站点</EmptyTitle>
+            <EmptyTitle>当前范围没有站点</EmptyTitle>
           </EmptyHeader>
         </Empty>
       )}
@@ -106,80 +109,102 @@ function ScopedSelection({ scope }: { scope: ReturnType<typeof useSiteScope> }) 
   );
 }
 
+function useRangeJobs(scope: ReturnType<typeof useSiteScope>) {
+  const jobs = useSeoQuery(`${utcDay()}/${scope.key}`, loadDailyJobs);
+  const siteIDs = new Set(scope.rows.map(({ id }) => id));
+  return {
+    ...jobs,
+    recent: jobs.data?.recent.filter(({ site_id }) => siteIDs.has(site_id)) ?? [],
+    today: jobs.data?.today.filter(({ site_id }) => siteIDs.has(site_id)) ?? [],
+    loading: jobs.loading || scope.loading,
+    error: jobs.error ?? scope.error,
+  };
+}
+
 function PortfolioMetrics({ scope }: { scope: ReturnType<typeof useSiteScope> }) {
-  const day = utcDay();
-  const { principal } = useSeoSession();
+  const jobs = useRangeJobs(scope);
   const { href } = useSeoLocation();
-  const owner = principal.role === "owner";
-  const { sites } = scope;
-  const needsMore = sites.data?.sites.length === 200;
-  const remaining = useSeoQuery(needsMore ? "/sites" : null, loadRemainingSites);
-  const jobs = useSeoQuery(day, loadDailyJobs);
-  const cost = useSeoQuery(owner ? day : null, loadDailyCost);
-  const pending = sites.loading || remaining.loading || jobs.loading || cost.loading;
-  const totalSites =
-    sites.data && (!needsMore || remaining.data) ? [...sites.data.sites, ...(remaining.data?.rows ?? [])] : undefined;
-  const totalsPartial = remaining.data?.complete === false;
-  const jobCoverage = jobs.data?.complete === false ? "已读取部分今日记录" : "按 UTC 今日创建";
-  const costCoverage = cost.data?.complete === false ? " · 已读取部分记录" : "";
+  const outcomes = latestJobBySite(jobs.recent, undefined, true);
+  const cms = latestJobBySite(jobs.recent, "cms_connection_test", true);
+  const failed = jobs.today.filter(({ state }) => state === "failed").length;
+  const succeeded = jobs.today.filter(({ state }) => state === "succeeded").length;
+  const outcomesDetail = outcomes.size
+    ? `最近 200 条组织任务覆盖 ${outcomes.size}/${scope.rows.length} 站`
+    : "暂无已完成任务观测";
+  const cmsDetail = cms.size ? `最近 CMS 验证覆盖 ${cms.size}/${scope.rows.length} 站` : "暂无 CMS 验证观测";
+  const dayDetail = jobs.data?.complete === false ? "UTC 今日 · 部分任务记录" : "UTC 今日创建";
+  const hasSites = !scope.loading && scope.error === undefined;
+  const hasJobs = !jobs.loading && jobs.error === undefined && jobs.data !== undefined;
 
   return (
     <section className="grid gap-3" aria-label="组织指标">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h2 className="font-semibold">组织运营</h2>
-          <p className="text-muted-foreground text-sm">{day} UTC</p>
+          <h2 className="font-semibold">站群状态</h2>
+          <p className="text-muted-foreground text-sm">{utcDay()} UTC · 当前站点范围</p>
         </div>
         <Button
           size="sm"
           variant="outline"
           onClick={() => {
-            sites.refresh();
-            if (needsMore) remaining.refresh();
+            scope.refresh();
             jobs.refresh();
-            if (owner) cost.refresh();
           }}
-          disabled={pending}
+          disabled={jobs.loading}
         >
-          <RefreshCw /> 刷新组织指标
+          <RefreshCw /> 刷新站群状态
         </Button>
       </div>
-      {Object.entries({ sites, remaining, jobs, cost }).map(
-        ([key, source]) =>
-          source.error !== undefined && <LoadError key={key} error={source.error} retry={source.refresh} />,
+      {jobs.error !== undefined && (
+        <LoadError
+          error={jobs.error}
+          retry={() => {
+            scope.refresh();
+            jobs.refresh();
+          }}
+        />
       )}
-      {pending ? (
+      {jobs.loading ? (
         <PageSkeleton />
       ) : (
         <MetricGrid
           label="组织运营指标"
           metrics={[
             {
-              label: "管理站点数量",
-              value: totalSites?.length,
-              detail: totalsPartial ? "已读取的登记站点" : undefined,
+              label: "网站总数",
+              value: hasSites ? scope.rows.length : undefined,
+              detail: scope.complete === false ? "仅已读取的站点" : "当前登记范围",
             },
             {
-              label: "活跃站点数量",
-              value: totalSites?.filter(({ status }) => status === "active").length,
-              detail: totalsPartial ? "已读取的启用站点" : "按登记状态",
+              label: "活跃网站",
+              value: hasSites ? scope.rows.filter(({ status }) => status === "active").length : undefined,
+              detail: "按登记状态",
             },
-            { label: "今日执行任务", value: jobs.data?.attempted, detail: `${jobCoverage}且已尝试执行` },
+            {
+              label: "异常网站",
+              value:
+                hasJobs && outcomes.size
+                  ? [...outcomes.values()].filter(({ state }) => state === "failed").length
+                  : undefined,
+              detail: outcomesDetail,
+            },
+            {
+              label: "CMS 连接失败",
+              value:
+                hasJobs && cms.size ? [...cms.values()].filter(({ state }) => state === "failed").length : undefined,
+              detail: cmsDetail,
+            },
+            {
+              label: "今日执行任务",
+              value: hasJobs ? jobs.today.filter(({ attempts }) => attempts > 0).length : undefined,
+              detail: `${dayDetail}且已尝试执行`,
+            },
             {
               label: "任务成功率",
-              value: jobs.data?.rate === undefined ? undefined : percent.format(jobs.data.rate),
-              detail: `${jobCoverage}，仅成功与失败任务`,
+              value: hasJobs && failed + succeeded > 0 ? percent.format(succeeded / (failed + succeeded)) : undefined,
+              detail: `${dayDetail}，仅成功与失败任务`,
             },
-            { label: "异常任务", value: jobs.data?.failures.length, detail: `${jobCoverage}的失败任务` },
-            ...(owner
-              ? [
-                  {
-                    label: "Provider 成本",
-                    value: cost.data?.amount === undefined ? undefined : usd.format(cost.data.amount),
-                    detail: cost.data ? `厂商回执及估算 · ${cost.data.unknown} 笔待确认${costCoverage}` : undefined,
-                  },
-                ]
-              : []),
+            { label: "失败任务", value: hasJobs ? failed : undefined, detail: dayDetail },
           ]}
         />
       )}
@@ -204,81 +229,90 @@ function PortfolioMetrics({ scope }: { scope: ReturnType<typeof useSiteScope> })
   );
 }
 
-function SiteMetrics({ site }: { site: Site }) {
-  const progress = useSeoQuery(site.id, loadContentProgress);
-  const published = useSeoQuery(site.id, loadPublished);
+function SearchMetrics({ site }: { site: Site }) {
   const reports = useSeoQuery(site.id, loadSearchReports);
+  const index = useSeoQuery(site.id, loadIndexStatus);
   const { href } = useSeoLocation();
-  const pending = progress.loading || published.loading || reports.loading;
-  const range = reports.data;
-  const projectScope =
-    progress.data && (progress.data.complete ? "本站内容项目" : `覆盖最近 ${progress.data.reviewedProjects} 个项目`);
-  const gscScope = range?.gsc
-    ? `${range.gsc.source} · ${range.gsc.days}/28 天${range.gsc.complete ? "" : " · 部分明细"}`
-    : "暂无同步的 GSC 数据";
-  const ga4Scope = range?.ga4
-    ? `${range.ga4.source} · ${range.ga4.days}/28 天${range.ga4.complete ? "" : " · 部分明细"}`
-    : "暂无同步的 GA4 自然搜索数据";
+  const report = reports.data;
+  const gsc = report?.gsc;
+  const ga4 = report?.ga4;
+  const missing = report?.connectionsComplete === false ? "连接列表覆盖不完整" : "未连接";
+  const detail = (source?: { source: string; days: number; complete: boolean }) =>
+    source ? `${source.source} · ${source.days}/28 天${source.complete ? "" : " · 部分明细"}` : undefined;
+  const scope = index.data?.observed
+    ? `${index.data.observed} 个已观测 URL${index.data.complete ? "" : " · 部分记录"}`
+    : "暂无索引观测";
+  const waiting = reports.loading || index.loading;
+  const gscEmpty = gsc ? "待同步" : missing;
+  const gaEmpty = ga4 ? "待同步" : missing;
+  function searchValue(value: Metric["value"], empty: string) {
+    return value ?? (report ? empty : undefined);
+  }
   return (
-    <section className="grid gap-3" aria-label="站点指标">
+    <section className="grid gap-3" aria-label="SEO 表现">
       <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="break-words font-semibold">{site.name} · 站点运营</h2>
-          {range && (
+        <div>
+          <h2 className="font-semibold">SEO 表现</h2>
+          {report && (
             <p className="text-muted-foreground text-sm">
-              搜索报告 {range.from} 至 {range.to}，按已同步明细统计
+              {report.from} 至 {report.to} · 已同步明细
             </p>
           )}
         </div>
         <Button
           size="sm"
           variant="outline"
-          disabled={pending}
           onClick={() => {
-            progress.refresh();
-            published.refresh();
             reports.refresh();
+            index.refresh();
           }}
+          disabled={waiting}
         >
-          <RefreshCw /> 刷新站点指标
+          <RefreshCw /> 刷新搜索与索引
         </Button>
       </div>
-      {progress.error !== undefined && <LoadError error={progress.error} retry={progress.refresh} />}
-      {published.error !== undefined && <LoadError error={published.error} retry={published.refresh} />}
       {reports.error !== undefined && <LoadError error={reports.error} retry={reports.refresh} />}
-      {pending ? (
+      {index.error !== undefined && <LoadError error={index.error} retry={index.refresh} />}
+      {waiting ? (
         <PageSkeleton />
       ) : (
         <MetricGrid
-          label="站点运营指标"
+          label="站点搜索指标"
           metrics={[
-            { label: "内容生产数量", value: progress.data?.count, detail: projectScope },
-            { label: "待审核文章", value: progress.data?.pending.length, detail: projectScope },
+            { label: "GSC 点击", value: searchValue(gsc?.clicks, gscEmpty), detail: detail(gsc) },
+            { label: "GSC 展示", value: searchValue(gsc?.impressions, gscEmpty), detail: detail(gsc) },
             {
-              label: "发布成功数量",
-              value: published.data?.count,
-              detail: published.data?.complete === false ? "已读取的发布记录" : "已发布或已核验",
+              label: "GSC 点击率",
+              value: searchValue(
+                gsc?.ctr === undefined ? undefined : percent.format(gsc.ctr),
+                gsc?.days ? "暂无有效展示" : gscEmpty,
+              ),
+              detail: detail(gsc),
             },
-            { label: "GSC 点击", value: range?.gsc?.totals[0], detail: gscScope },
-            { label: "GSC 展示", value: range?.gsc?.totals[1], detail: gscScope },
-            { label: "自然搜索流量", value: range?.ga4?.totals[0], detail: ga4Scope },
+            {
+              label: "GSC 平均排名",
+              value: searchValue(
+                gsc?.position === undefined ? undefined : decimal.format(gsc.position),
+                gsc?.days ? "暂无有效排名" : gscEmpty,
+              ),
+              detail: detail(gsc),
+            },
+            { label: "自然搜索流量", value: searchValue(ga4?.sessions, gaEmpty), detail: detail(ga4) },
+            { label: "已索引 URL", value: index.data?.observed ? index.data.indexed : undefined, detail: scope },
+            { label: "未索引 URL", value: index.data?.observed ? index.data.notIndexed : undefined, detail: scope },
+            { label: "待核实索引", value: index.data?.observed ? index.data.pending : undefined, detail: scope },
           ]}
         />
       )}
       <div className="flex flex-wrap gap-2">
         <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.content.overview.path, { site: site.id })}>
-            内容项目 <ArrowRight />
+          <Link href={href(seoRoutes.execution.gsc.path)}>
+            谷歌搜索数据 <ArrowRight />
           </Link>
         </Button>
         <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.execution.publishing.path, { site: site.id })}>
-            发布中心 <ArrowRight />
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.execution.gsc.path, { site: site.id })}>
-            搜索分析 <ArrowRight />
+          <Link href={href(seoRoutes.execution.index.path)}>
+            索引管理 <ArrowRight />
           </Link>
         </Button>
       </div>
@@ -286,39 +320,178 @@ function SiteMetrics({ site }: { site: Site }) {
   );
 }
 
+function ContentMetrics({ site }: { site: Site }) {
+  const progress = useSeoQuery(site.id, loadContentProgress);
+  const published = useSeoQuery(site.id, loadPublished);
+  const { href } = useSeoLocation();
+  const pending = progress.loading || published.loading;
+  const coverage =
+    progress.data?.complete === false ? `覆盖最近 ${progress.data.reviewedProjects} 个项目` : "本站内容项目";
+  return (
+    <section className="grid gap-3" aria-label="内容运营">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <h2 className="font-semibold">内容运营</h2>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => {
+            progress.refresh();
+            published.refresh();
+          }}
+        >
+          <RefreshCw /> 刷新内容指标
+        </Button>
+      </div>
+      {progress.error !== undefined && <LoadError error={progress.error} retry={progress.refresh} />}
+      {published.error !== undefined && <LoadError error={published.error} retry={published.refresh} />}
+      {pending ? (
+        <PageSkeleton />
+      ) : (
+        <MetricGrid
+          label="站点运营指标"
+          metrics={[
+            {
+              label: "内容项目",
+              value: progress.data?.total,
+              detail: progress.data?.totalComplete === false ? "仅已读取的项目" : "本站全部项目",
+            },
+            { label: "待生成文章", value: progress.data?.generation, detail: coverage },
+            { label: "内容生产数量", value: progress.data?.count, detail: coverage },
+            { label: "待审核文章", value: progress.data?.pending.length, detail: coverage },
+            {
+              label: "已发布文章",
+              value: published.data?.count,
+              detail: published.data?.complete === false ? "仅已读取的发布记录" : "已发布或核验的 CMS 内容，按目标去重",
+            },
+          ]}
+        />
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href={href(seoRoutes.content.overview.path)}>
+            内容项目 <ArrowRight />
+          </Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href={href(seoRoutes.execution.publishing.path)}>
+            发布中心 <ArrowRight />
+          </Link>
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function AIMetrics() {
+  const ai = useSeoQuery(utcDay(), loadDailyAI);
+  const { href } = useSeoLocation();
+  const { model, data } = ai.data ?? {};
+  function money(summary?: { amount?: number; unknown: number }) {
+    return summary?.amount === undefined ? undefined : usd.format(summary.amount);
+  }
+  return (
+    <section className="grid gap-3" aria-label="AI 运营">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 className="font-semibold">AI 运营</h2>
+          <p className="text-muted-foreground text-sm">
+            组织范围 · UTC 今日{ai.data?.complete === false ? " · 部分回执" : ""}
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={ai.refresh} disabled={ai.loading}>
+          <RefreshCw /> 刷新 AI 指标
+        </Button>
+      </div>
+      {ai.error !== undefined && <LoadError error={ai.error} retry={ai.refresh} />}
+      {ai.loading ? (
+        <PageSkeleton />
+      ) : (
+        <MetricGrid
+          label="AI 运营指标"
+          metrics={[
+            { label: "模型调用量", value: model?.count, detail: "已记录回执，排除测试和纯预留" },
+            {
+              label: "Token 使用量",
+              value: model?.tokens,
+              detail: model ? `${model.tokenCoverage}/${model.count} 条调用有完整 Token` : undefined,
+            },
+            {
+              label: "模型费用",
+              value: money(model),
+              detail: model ? `含估算 · ${model.unknown} 笔待确认` : undefined,
+            },
+            { label: "DataForSEO 费用", value: money(data), detail: data ? `${data.unknown} 笔待确认` : undefined },
+            {
+              label: "模型每日预算使用率",
+              value: ai.data?.modelBudget === undefined ? undefined : budgetPercent.format(ai.data.modelBudget),
+              detail: "内容模型费用与预留 ÷ 已设美元预算",
+            },
+            {
+              label: "数据每日预算使用率",
+              value: ai.data?.dataBudget === undefined ? undefined : budgetPercent.format(ai.data.dataBudget),
+              detail:
+                ai.data?.budgetComplete === false
+                  ? "仅已读取的 DataForSEO 预算"
+                  : "DataForSEO 费用与预留 ÷ 已设美元预算",
+            },
+          ]}
+        />
+      )}
+      <Button asChild variant="outline" size="sm" className="justify-self-start">
+        <Link href={href(seoRoutes.system.providers.path)}>
+          大模型服务商与请求诊断 <ArrowRight />
+        </Link>
+      </Button>
+    </section>
+  );
+}
+
 function Overview() {
   const scope = useSiteScope();
+  const { principal } = useSeoSession();
   return (
     <>
-      <PortfolioMetrics scope={scope} />
       <ScopedSelection scope={scope} />
-      {scope.site && <SiteMetrics site={scope.site} />}
+      <PortfolioMetrics scope={scope} />
+      {scope.site ? (
+        <>
+          <SearchMetrics site={scope.site} />
+          <ContentMetrics site={scope.site} />
+        </>
+      ) : (
+        scope.rows.length > 0 &&
+        !scope.error && (
+          <p className="text-muted-foreground text-sm">选择单个站点可查看该站点的 SEO 表现与内容运营数据。</p>
+        )
+      )}
+      {principal.role === "owner" && <AIMetrics />}
     </>
   );
 }
 
 function Health() {
-  const sites = useSeoList<Site>("sites");
-  const jobs = useSeoQuery<{ jobs: Job[] }>("/jobs?limit=200");
+  const scope = useSiteScope();
+  const sites = useLocalSeoRecords(scope.rows, scope.key, scope);
+  const jobs = useRangeJobs(scope);
   const { href, siteID } = useSeoLocation();
-  const latest = new Map<string, Job>();
+  const latest = latestJobBySite(jobs.recent);
+  const cms = latestJobBySite(jobs.recent, "cms_connection_test", true);
   let noJob = "暂无近期任务";
   if (jobs.loading) noJob = "正在读取";
   if (jobs.error !== undefined) noJob = "读取失败";
-  for (const job of jobs.data?.jobs ?? []) {
-    if (!latest.has(job.site_id)) latest.set(job.site_id, job);
-  }
   return (
     <>
       {jobs.error !== undefined && <LoadError error={jobs.error} retry={jobs.refresh} />}
       <RecordsTable
         label="站群健康"
-        columns={["站点", "市场", "登记状态", "最近任务"]}
-        empty="暂无登记站点"
+        columns={["站点", "市场", "登记状态", "最近任务", "最近 CMS 验证"]}
+        empty="当前范围没有站点"
         list={sites}
       >
         {sites.records.map((site) => {
           const job = latest.get(site.id);
+          const check = cms.get(site.id);
           return (
             <TableRow key={site.id}>
               <TableCell className="px-3 py-2">
@@ -348,6 +521,7 @@ function Health() {
                   noJob
                 )}
               </TableCell>
+              <TableCell className="px-3">{check ? <JobStatus job={check} /> : "暂无观测"}</TableCell>
             </TableRow>
           );
         })}
@@ -358,18 +532,18 @@ function Health() {
 
 function Inbox() {
   const scope = useSiteScope();
-  const day = utcDay();
-  const jobs = useSeoQuery(day, loadDailyJobs);
+  const jobs = useRangeJobs(scope);
   const progress = useSeoQuery(scope.site?.id ?? null, loadContentProgress);
   const { href } = useSeoLocation();
-  const failures = jobs.data?.failures.slice(0, 25) ?? [];
+  const failed = jobs.today.filter(({ state }) => state === "failed");
+  const failures = failed.slice(0, 25);
   const pending = progress.data?.pending ?? [];
   return (
     <>
       <ScopedSelection scope={scope} />
       <section aria-label="失败任务" className="grid gap-3">
         <h2 className="font-semibold">今日失败任务（UTC）</h2>
-        {jobs.data && (!jobs.data.complete || jobs.data.failures.length > failures.length) && (
+        {jobs.data && (!jobs.data.complete || failed.length > failures.length) && (
           <p className="text-muted-foreground text-sm">
             已显示 {failures.length} 条近期失败任务。
             <Link className="underline" href={href(seoRoutes.system.jobs.path)}>
@@ -428,7 +602,9 @@ function Inbox() {
 }
 
 function Activity() {
-  const list = useSeoList<Job>("jobs");
+  const scope = useSiteScope();
+  const jobs = useRangeJobs(scope);
+  const list = useLocalSeoRecords(jobs.recent, scope.key, jobs);
   return (
     <RecordsTable
       label="最近任务活动"

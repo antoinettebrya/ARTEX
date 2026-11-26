@@ -101,6 +101,7 @@ export function NavMain({ items }: NavMainProps) {
 
   const isSubItemActive = (url: string) => path === routePath(url);
   const isSubmenuOpen = (item: NavMainParentItem) =>
+    item.activePaths?.includes(path) ||
     item.subItems.some((sub) => (sub.url.startsWith("/seo/") ? isSubItemActive(sub.url) : path.startsWith(sub.url)));
   const isItemActive = (item: NavMainItem) => (hasSubItems(item) ? isSubmenuOpen(item) : isSubItemActive(item.url));
 

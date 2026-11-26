@@ -27,7 +27,7 @@ import {
   type RefreshSignals,
   sourceKinds,
 } from "@/lib/seo/content";
-import { initialMarket } from "@/lib/seo/research";
+import { initialMarket, type Market } from "@/lib/seo/research";
 import { seoRoutes } from "@/lib/seo/routes";
 
 import { useSeoLocation } from "../context";
@@ -43,7 +43,8 @@ export function ProjectEditor({
   onClose,
   onSaved,
   keyword,
-}: Close & { site: Site; onSaved: (project: ContentProject) => void; keyword?: string }) {
+  market,
+}: Close & { site: Site; onSaved: (project: ContentProject) => void; keyword?: string; market?: Market }) {
   return (
     <FormDialog
       title="创建内容项目"
@@ -64,7 +65,7 @@ export function ProjectEditor({
           <Input id="content-project-keyword" name="keyword" maxLength={400} defaultValue={keyword} required />
         </Field>
       </div>
-      <MarketFields market={initialMarket(site)} />
+      <MarketFields market={market ?? initialMarket(site)} />
     </FormDialog>
   );
 }

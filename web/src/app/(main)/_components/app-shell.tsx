@@ -14,7 +14,6 @@ import {
 } from "@/lib/preferences/layout";
 import { PREFERENCE_DEFAULTS } from "@/lib/preferences/preferences-config";
 import { cn } from "@/lib/utils";
-
 import type { NavGroup } from "@/navigation/sidebar/sidebar-items";
 
 import { MainContent } from "./main-content";
@@ -33,6 +32,7 @@ export type ShellNavigation = {
   home: string;
   title: string;
   groups: readonly NavGroup[];
+  scopeControl?: ReactNode;
   onLogout: () => void;
 };
 

@@ -18,6 +18,7 @@ import {
   type ContentWorkspace,
   contentLabel,
 } from "@/lib/seo/content";
+import { marketFilterChanges, readMarketFilter } from "@/lib/seo/market";
 import { marketLabel } from "@/lib/seo/research";
 import { type ContentView, seoRoutes } from "@/lib/seo/routes";
 
@@ -35,6 +36,7 @@ import {
   StateBadge,
   useSeoRecords,
 } from "../shared";
+import { WorkflowNav } from "../workflow-nav";
 import { ArticleEditor, ArticlePreview, BriefEditor, BriefPreview, Outline } from "./article";
 import { ApprovalEditor, ProjectEditor, RefreshEditor, SourceEditor, StageEditor, type StageSelection } from "./forms";
 import { Inventory, TaskRecords } from "./inventory";
@@ -53,7 +55,8 @@ import {
 } from "./views";
 
 const descriptions: Record<ContentView, string> = {
-  overview: "按站点管理内容项目，查看项目的市场、研究证据和进度。",
+  overview: "按站点查看内容项目列表及对应市场。",
+  project: "查看已选项目的研究证据和内容生产进度。",
   strategy: "根据搜索证据和站点需求确定页面策略。",
   briefs: "查看和编辑用于写作的内容简报。",
   sources: "维护一手资料与支持文章论点的证据。",
@@ -65,7 +68,7 @@ const descriptions: Record<ContentView, string> = {
   inventory: "管理只读采集范围，查看已发现的站点页面。",
 };
 
-const projectShortcuts = ["overview", "article", "quality", "history"] as const;
+const projectShortcuts = ["project", "article", "quality", "history"] as const;
 
 export function ContentStudio({ view }: { view: ContentView }) {
   const { principal } = useSeoSession();
@@ -77,7 +80,8 @@ export function ContentStudio({ view }: { view: ContentView }) {
   const { site } = scope;
   const [editingSite, setEditingSite] = useState<string>();
   const [projectRevision, setProjectRevision] = useState(0);
-  const linkedKeyword = params.get("keyword")?.slice(0, 400);
+  const linkedKeyword = params.get("keyword")?.trim().slice(0, 400);
+  const linkedMarket = readMarketFilter(params);
   const active = writable && site?.status === "active";
 
   return (
@@ -99,7 +103,18 @@ export function ContentStudio({ view }: { view: ContentView }) {
           <SiteSelector id="content-site" label="内容站点" scope={scope} />
         </FilterBar>
       )}
-      {site && view === "inventory" && <SiteInventory key={site.id} site={site} owner={owner} writable={active} />}
+      {view === "overview" && linkedKeyword && (
+        <p className="break-words text-muted-foreground text-sm">
+          研究关键词 · {linkedKeyword}
+          {linkedMarket && ` · ${marketLabel(linkedMarket)}`}
+        </p>
+      )}
+      {view === "inventory" && (
+        <>
+          <WorkflowNav label="站点资产来源" pages={[seoRoutes.content.inventory, seoRoutes.execution.cms]} />
+          {site && <SiteInventory key={site.id} site={site} owner={owner} writable={active} />}
+        </>
+      )}
       {site && view !== "inventory" && (
         <SiteProjects
           key={`${site.id}/${projectRevision}`}
@@ -121,10 +136,18 @@ export function ContentStudio({ view }: { view: ContentView }) {
         <ProjectEditor
           site={site}
           keyword={linkedKeyword}
+          market={linkedMarket}
           onClose={() => setEditingSite(undefined)}
           onSaved={(project) => {
             setProjectRevision((value) => value + 1);
-            router.push(href(seoRoutes.content.overview.path, { site: site.id, project: project.id }));
+            router.push(
+              href(seoRoutes.content.project.path, {
+                site_id: site.id,
+                project_id: project.id,
+                keyword: project.keyword,
+                ...marketFilterChanges(project.market),
+              }),
+            );
           }}
         />
       )}
@@ -169,8 +192,7 @@ function SiteProjects({
   const overview = view === "overview";
   const list = useSeoRecords<ContentProject>(overview ? path : null, "items");
   const selector = useSeoQuery<{ items: ContentProject[] }>(overview ? null : `${path}&limit=200`);
-  const projects = overview ? list : selector;
-  const records = overview ? list.records : (selector.data?.items ?? []);
+  const records = selector.data?.items ?? [];
   const selectedProject = preferredProject ?? records[0]?.id;
 
   return (
@@ -186,7 +208,12 @@ function SiteProjects({
             <TableRow key={item.id}>
               <TableCell className="max-w-72 whitespace-normal break-words px-3 py-2">
                 <Link
-                  href={href(seoRoutes.content.overview.path, { site: site.id, project: item.id })}
+                  href={href(seoRoutes.content.project.path, {
+                    site_id: site.id,
+                    project_id: item.id,
+                    keyword: item.keyword,
+                    ...marketFilterChanges(item.market),
+                  })}
                   aria-current={selectedProject === item.id ? "true" : undefined}
                   className="font-medium underline underline-offset-2"
                   scroll={false}
@@ -211,7 +238,7 @@ function SiteProjects({
           )}
         </>
       )}
-      {selectedProject && (
+      {!overview && selectedProject && (
         <ProjectWorkspace
           key={selectedProject}
           projectID={selectedProject}
@@ -220,7 +247,7 @@ function SiteProjects({
           active={writable}
           view={view}
           records={records}
-          refreshProjects={projects.refresh}
+          refreshProjects={selector.refresh}
         />
       )}
     </>
@@ -240,7 +267,7 @@ function ProjectWorkspace({
   site: Site;
   owner: boolean;
   active: boolean;
-  view: Exclude<ContentView, "inventory">;
+  view: Exclude<ContentView, "inventory" | "overview">;
   records: ContentProject[];
   refreshProjects: () => void;
 }) {
@@ -286,7 +313,16 @@ function ProjectWorkspace({
             label="内容项目"
             options={options.map((item) => ({ id: item.id, label: `${item.keyword} · ${marketLabel(item.market)}` }))}
             value={options.some((option) => option.id === projectID) ? projectID : undefined}
-            onChange={(project) => update({ site: site.id, project })}
+            onChange={(project) => {
+              const selected = options.find(({ id }) => id === project);
+              if (selected)
+                update({
+                  site_id: site.id,
+                  project_id: project,
+                  keyword: selected.keyword,
+                  ...marketFilterChanges(selected.market),
+                });
+            }}
           />
           {current && (
             <div className="flex flex-wrap items-center gap-2">
@@ -318,6 +354,9 @@ function ProjectWorkspace({
       {workspace && (
         <div className="grid min-w-0 gap-3">
           <nav aria-label="项目快捷导航" className="flex flex-wrap items-center gap-1">
+            <Button asChild size="sm" variant="ghost">
+              <Link href={href(seoRoutes.content.overview.path)}>项目列表</Link>
+            </Button>
             {projectShortcuts.map((target) => (
               <Button asChild key={target} size="sm" variant={target === view ? "secondary" : "ghost"}>
                 <Link
@@ -329,7 +368,7 @@ function ProjectWorkspace({
               </Button>
             ))}
           </nav>
-          {view === "overview" && <Overview workspace={workspace} onStage={setStage} canWrite={active} />}
+          {view === "project" && <Overview workspace={workspace} onStage={setStage} canWrite={active} />}
           {view === "strategy" && (
             <StrategyView
               workspace={workspace}

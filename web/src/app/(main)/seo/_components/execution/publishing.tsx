@@ -30,7 +30,9 @@ import {
   type PublicationStatus,
   publicationStates,
 } from "@/lib/seo/execution";
+import { seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { useSeoQuery } from "../query";
 import { Field, FormDialog, field, formatTime, LoadError, PageSkeleton, RecordsTable, StateBadge } from "../shared";
 import { useExecutionRecords } from "./records";
@@ -248,6 +250,7 @@ export function PublishingPanel({
   onTask,
   revision,
   requestedPackage,
+  mode,
 }: {
   site: Site;
   connections: Connection[];
@@ -256,9 +259,13 @@ export function PublishingPanel({
   onTask: (selection: TaskSelection) => void;
   revision: number;
   requestedPackage?: string;
+  mode: "publishing" | "publications" | "verification";
 }) {
   const list = useExecutionRecords<ExecutionPublication>("publications", site.id, revision);
-  const packages = useSeoQuery<{ items: PreparedPackage[] }>(owner ? executionPath("packages", site.id) : null);
+  const authoring = owner && writable && mode === "publishing";
+  const verifying = mode === "verification";
+  const { href } = useSeoLocation();
+  const packages = useSeoQuery<{ items: PreparedPackage[] }>(authoring ? executionPath("packages", site.id) : null);
   const { refresh } = list;
   const { refresh: refreshPackages } = packages;
   const [editor, setEditor] = useState(false);
@@ -270,7 +277,7 @@ export function PublishingPanel({
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">CMS 发布记录</h2>
+        <h2 className="font-semibold">{verifying ? "发布核验状态" : "CMS 发布记录"}</h2>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
@@ -284,22 +291,25 @@ export function PublishingPanel({
           >
             <RefreshCw /> 刷新发布记录
           </Button>
-          {owner && writable && publishConnections.length > 0 && !!packages.data?.items?.length && (
+          {authoring && publishConnections.length > 0 && !!packages.data?.items?.length && (
             <Button type="button" size="sm" onClick={() => setEditor(true)}>
               <Plus /> 创建发布记录
             </Button>
           )}
         </div>
       </div>
-      {owner && packages.error !== undefined && <LoadError error={packages.error} retry={refreshPackages} />}
-      {owner && writable && !packages.loading && !packages.error && !packages.data?.items?.length && (
+      {authoring && packages.error !== undefined && <LoadError error={packages.error} retry={refreshPackages} />}
+      {authoring && !packages.loading && !packages.error && !packages.data?.items?.length && (
         <p className="text-muted-foreground text-sm">
-          <Link href={`/seo/content?site=${site.id}`} className="underline underline-offset-2">
+          <Link
+            href={href(seoRoutes.content.overview.path, { site_id: site.id })}
+            className="underline underline-offset-2"
+          >
             在内容工作室准备通过审核的发布包
           </Link>
         </p>
       )}
-      {owner && writable && !!packages.data?.items?.length && !publishConnections.length && (
+      {authoring && !!packages.data?.items?.length && !publishConnections.length && (
         <p className="text-muted-foreground text-sm">请在 CMS 连接启用并测试具备草稿写入权限的服务。</p>
       )}
       <RecordsTable
@@ -310,7 +320,8 @@ export function PublishingPanel({
       >
         {list.records.map((entry) => {
           const connection = connections.find((item) => item.id === entry.connection_id);
-          const allowed = owner && writable && connection?.enabled && connection.configured && connection.allow_writes;
+          const allowed =
+            !verifying && owner && writable && connection?.enabled && connection.configured && connection.allow_writes;
 
           return (
             <TableRow key={entry.id}>

@@ -66,8 +66,30 @@ export function useSeoRecords<T>(path: string | null, name: string) {
   };
 }
 
-export function useSeoList<T>(name: "sites" | "jobs" | "providers" | "members" | "events") {
-  return useSeoRecords<T>(name === "events" ? "/audit" : `/${name}`, name);
+export function useSeoList<T>(name: "sites" | "jobs" | "providers" | "members" | "events", enabled = true) {
+  const path = name === "events" ? "/audit" : `/${name}`;
+  return useSeoRecords<T>(enabled ? path : null, name);
+}
+
+export function useLocalSeoRecords<T>(
+  rows: T[],
+  key: string,
+  source: Pick<ListState, "loading" | "error" | "refresh"> & { refreshing?: boolean },
+) {
+  const [position, setPosition] = useState({ key, offset: 0 });
+  const remembered = position.key === key ? position.offset : 0;
+  const lastPage = Math.floor(Math.max(0, rows.length - 1) / pageSize) * pageSize;
+  const offset = Math.min(remembered, lastPage);
+  const records = rows.slice(offset, offset + pageSize);
+  return {
+    ...source,
+    refreshing: source.refreshing ?? false,
+    records,
+    offset,
+    count: records.length,
+    hasNext: offset + pageSize < rows.length,
+    setOffset: (offset: number) => setPosition({ key, offset }),
+  };
 }
 
 export function PageFrame({

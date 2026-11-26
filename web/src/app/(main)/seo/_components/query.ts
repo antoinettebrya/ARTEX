@@ -48,3 +48,29 @@ export function useSeoQuery<T>(
     refresh,
   };
 }
+
+const pageSize = 200;
+const pageLimit = 10;
+
+export async function readSeoPages<T>(
+  path: string,
+  key: string,
+  signal: AbortSignal,
+  settings: { offset?: number; takeWhile?: (row: T) => boolean } = {},
+) {
+  const rows: T[] = [];
+  const separator = path.includes("?") ? "&" : "?";
+  const { takeWhile } = settings;
+  for (let page = 0; page < pageLimit; page++) {
+    const offset = (settings.offset ?? 0) + page * pageSize;
+    const data = await seoRequest<Record<string, T[]>>(`${path}${separator}limit=${pageSize}&offset=${offset}`, {
+      signal,
+    });
+    const records = data[key];
+    const stop = takeWhile ? records.findIndex((row) => !takeWhile(row)) : -1;
+    if (stop !== -1) return { rows: rows.concat(records.slice(0, stop)), complete: true };
+    rows.push(...records);
+    if (records.length < pageSize) return { rows, complete: true };
+  }
+  return { rows, complete: false };
+}

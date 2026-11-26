@@ -16,8 +16,8 @@ import { executionJobLabels } from "@/lib/seo/execution";
 import { researchJobLabels } from "@/lib/seo/research";
 import { seoRoutes } from "@/lib/seo/routes";
 
-import { useSeoLocation } from "./context";
-import { useSeoQuery } from "./query";
+import { useSeoLocation, useSiteScope } from "./context";
+import { readSeoPages, useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
 import {
   ConfirmChange,
@@ -31,6 +31,7 @@ import {
   RecordDetails,
   RecordsTable,
   StateBadge,
+  useLocalSeoRecords,
   useSeoList,
 } from "./shared";
 
@@ -120,16 +121,28 @@ function JobEditor({
   );
 }
 
+function loadScopedJobs(path: string, signal: AbortSignal) {
+  return readSeoPages<Job>(path.split("?", 1)[0], "jobs", signal);
+}
+
 export function Jobs() {
   const { principal } = useSeoSession();
   const writable = principal.role !== "viewer";
   const { params, siteID: site, href, update } = useSeoLocation();
-  const editing = writable && !!site && params.get("new") === "1";
+  const scope = useSiteScope();
+  const editing = writable && !!scope.site && params.get("new") === "1";
   const selectedJob = params.get("job");
   const details = useSeoQuery<{ job: Job }>(isID(selectedJob) ? `/jobs/${selectedJob}` : null);
-  const selected = useSeoQuery<{ site: Site }>(editing ? `/sites/${site}` : null);
   const providers = useSeoQuery<{ providers: Provider[] }>(editing ? "/providers?limit=200" : null);
-  const list = useSeoList<Job>("jobs");
+  const directory = useSeoList<Job>("jobs", !scope.restricted);
+  const scoped = useSeoQuery(scope.restricted ? `/jobs?${scope.key}` : null, loadScopedJobs);
+  const siteIDs = new Set(scope.rows.map(({ id }) => id));
+  const filtered = useLocalSeoRecords(
+    scoped.data?.rows.filter(({ site_id }) => siteIDs.has(site_id)) ?? [],
+    scope.key,
+    { ...scoped, error: scoped.error ?? scope.error, loading: scoped.loading || scope.loading },
+  );
+  const list = scope.restricted ? filtered : directory;
   const [result, setResult] = useState<Job>();
   const [cancel, setCancel] = useState<Job>();
 
@@ -154,12 +167,14 @@ export function Jobs() {
         </>
       }
     >
-      {editing && [selected, providers].some((query) => query.loading) && <PageSkeleton />}
-      {editing && selected.error !== undefined && <LoadError error={selected.error} retry={selected.refresh} />}
+      {editing && providers.loading && <PageSkeleton />}
+      {scope.restricted && scoped.data?.complete === false && (
+        <p className="text-muted-foreground text-sm">当前筛选覆盖最近 2,000 条组织任务。</p>
+      )}
       {editing && providers.error !== undefined && <LoadError error={providers.error} retry={providers.refresh} />}
       {details.loading && <PageSkeleton />}
       {details.error !== undefined && <LoadError error={details.error} retry={details.refresh} />}
-      {details.data && (!site || details.data.job.site_id === site) && (
+      {details.data && (!scope.restricted || siteIDs.has(details.data.job.site_id)) && (
         <RecordDetails
           title={jobNames[details.data.job.kind]}
           value={{
@@ -171,7 +186,7 @@ export function Jobs() {
           onClose={() => update({ job: null }, { replace: true })}
         />
       )}
-      {details.data && site && details.data.job.site_id !== site && (
+      {details.data && scope.restricted && !siteIDs.has(details.data.job.site_id) && (
         <p className="text-muted-foreground text-sm">该任务不属于当前选择的站点。</p>
       )}
       <RecordsTable
@@ -209,10 +224,10 @@ export function Jobs() {
           </TableRow>
         ))}
       </RecordsTable>
-      {selected.data?.site.status === "active" && providers.data && (
+      {editing && scope.site?.status === "active" && providers.data && (
         <JobEditor
           key={site}
-          site={selected.data.site}
+          site={scope.site}
           providers={providers.data.providers.filter(
             (provider) => provider.enabled && (provider.kind ?? "openai") === "openai",
           )}

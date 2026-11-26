@@ -14,9 +14,9 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { type Site, seoRequest } from "@/lib/seo/client";
-import { seoRoutes } from "@/lib/seo/routes";
+import { ALL_SITES, seoRoutes } from "@/lib/seo/routes";
 
-import { SiteSelector, useSeoLocation, useSiteScope } from "./context";
+import { SiteSelector, siteGroup, useSeoLocation, useSiteScope } from "./context";
 import { useSeoSession } from "./session";
 import {
   Field,
@@ -28,6 +28,7 @@ import {
   PageSkeleton,
   RecordsTable,
   StateBadge,
+  useLocalSeoRecords,
   useSeoList,
 } from "./shared";
 
@@ -37,13 +38,16 @@ export function Sites() {
   const { principal } = useSeoSession();
   const { href, siteID } = useSeoLocation();
   const writable = principal.role !== "viewer";
-  const list = useSeoList<Site>("sites");
+  const scope = useSiteScope();
+  const directory = useSeoList<Site>("sites", !scope.restricted);
+  const filtered = useLocalSeoRecords(scope.rows, scope.key, scope);
+  const list = scope.restricted ? filtered : directory;
   const [edit, setEdit] = useState<Site | null>();
 
   return (
     <PageFrame
       title={seoRoutes.sites.list.title}
-      description="管理当前组织登记的站点、国家和语言。"
+      description="管理当前范围内登记的站点、国家和语言。"
       actions={
         writable && (
           <Button size="sm" variant="outline" onClick={() => setEdit(null)}>
@@ -55,7 +59,7 @@ export function Sites() {
       <RecordsTable
         label="已登记站点"
         columns={["站点", "市场", "CMS", "状态", ...(writable ? ["操作"] : [])]}
-        empty="暂无登记站点"
+        empty="当前范围没有站点"
         list={list}
       >
         {list.records.map((site) => (
@@ -106,8 +110,62 @@ export function Sites() {
         ))}
       </RecordsTable>
       {edit !== undefined && writable && (
-        <SiteEditor edit={edit} onSaved={list.refresh} onClose={() => setEdit(undefined)} />
+        <SiteEditor
+          edit={edit}
+          onSaved={() => {
+            scope.refresh();
+            if (!scope.restricted) directory.refresh();
+          }}
+          onClose={() => setEdit(undefined)}
+        />
       )}
+    </PageFrame>
+  );
+}
+
+export function SiteGroups() {
+  const scope = useSiteScope();
+  const { href } = useSeoLocation();
+  const groups = new Map<string, { count: number; active: number }>();
+  for (const site of scope.allSites) {
+    const key = siteGroup(site);
+    const row = groups.get(key) ?? { count: 0, active: 0 };
+    row.count++;
+    if (site.status === "active") row.active++;
+    groups.set(key, row);
+  }
+  const list = useLocalSeoRecords(
+    [...groups].sort(([a], [b]) => a.localeCompare(b)),
+    "groups",
+    scope,
+  );
+
+  return (
+    <PageFrame title={seoRoutes.sites.groups.title} description="按已登记的国家和语言查看区域站群。">
+      {scope.complete === false && <p className="text-muted-foreground text-sm">仅统计已读取的站点。</p>}
+      <RecordsTable label="区域站群" columns={["区域分组", "站点", "启用", "查看"]} empty="暂无区域站群" list={list}>
+        {list.records.map(([key, { count, active }]) => (
+          <TableRow key={key}>
+            <TableCell className="px-3 py-2">{key.replace(":", " · ")}</TableCell>
+            <TableCell className="px-3 tabular-nums">{count}</TableCell>
+            <TableCell className="px-3 tabular-nums">{active}</TableCell>
+            <TableCell className="px-3">
+              <Link
+                className="font-medium hover:underline"
+                href={href(seoRoutes.sites.list.path, {
+                  site_id: ALL_SITES,
+                  site_group: key,
+                  site_country: null,
+                  site_language: null,
+                })}
+              >
+                查看分组站点
+              </Link>
+            </TableCell>
+          </TableRow>
+        ))}
+      </RecordsTable>
+      <p className="text-muted-foreground text-sm">自定义分组与管理在规划中。</p>
     </PageFrame>
   );
 }
@@ -173,7 +231,7 @@ export function SiteSettings() {
       {!site && !loading && !error && (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>暂无登记站点</EmptyTitle>
+            <EmptyTitle>{scope.options.length ? "请选择一个站点" : "当前范围没有站点"}</EmptyTitle>
           </EmptyHeader>
           <Button asChild variant="outline" size="sm">
             <Link href={seoRoutes.sites.list.path}>查看全部站点</Link>

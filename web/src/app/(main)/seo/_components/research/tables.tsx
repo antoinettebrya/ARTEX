@@ -2,10 +2,13 @@
 
 import type { ReactNode } from "react";
 
+import Link from "next/link";
+
 import { Ban, FileText, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { marketFilterChanges } from "@/lib/seo/market";
 import type {
   Cluster,
   Competitor,
@@ -25,6 +28,7 @@ import type {
 import { marketLabel, marketQuery, researchJobLabels, usd } from "@/lib/seo/research";
 import { type ResearchView, seoRoutes } from "@/lib/seo/routes";
 
+import { useSeoLocation } from "../context";
 import { formatTime, RecordsTable, StateBadge, useSeoRecords } from "../shared";
 
 export type Detail =
@@ -236,7 +240,8 @@ export function ResearchResults({
   onCancel: (job: ResearchJob) => void;
   onAddPage: () => void;
 }) {
-  const path = researchPath(view, site, market, search);
+  const { href } = useSeoLocation();
+  const path = researchPath(view === "expansion" ? "suggestions" : view, site, market, search);
   const title = view === "seeds" ? "种子关键词" : seoRoutes.research[view].title;
 
   function dataSource(row: { snapshot_id?: string | null }) {
@@ -247,49 +252,47 @@ export function ResearchResults({
   switch (view) {
     case "seeds":
       return (
-        <div className="space-y-6">
-          <ResearchTable<Seed>
-            title={title}
-            path={path}
-            identify={keyed}
-            columns={[
-              { name: "种子词", value: (r) => <KeywordText keyword={r.keyword} /> },
-              { name: "市场", value: (r) => <MarketText market={r.market} /> },
-              { name: "最近研究（UTC）", value: (r) => time(r.collected_at) },
-              ...(canStart
-                ? [
-                    {
-                      name: "操作",
-                      value: (r: Seed) => action("收集指标", () => onJob("keyword_metrics", r.keyword, r.market)),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-          <div className="space-y-2">
-            <h2 className="font-medium text-sm">关键词建议</h2>
-            <ResearchTable<Suggestion>
-              title="关键词建议"
-              path={researchPath("suggestions", site, market)}
-              identify={(r) => `${keyed(r)}/${r.seed}/${r.keyword}/${r.operation}`}
-              columns={[
-                { name: "种子词", value: (r) => <KeywordText keyword={r.seed} /> },
-                { name: "建议关键词", value: (r) => <KeywordText keyword={r.keyword} /> },
-                { name: "拓展方式", value: (r) => sourceLabel(r.operation) },
-                { name: "市场与来源（UTC）", value: (r) => <Scope {...r} /> },
-                {
-                  name: "操作",
-                  value: (r) => (
-                    <div className="flex flex-wrap gap-1">
-                      {canStart && action("收集指标", () => onJob("keyword_metrics", r.keyword, r.market))}
-                      {dataSource(r)}
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </div>
+        <ResearchTable<Seed>
+          title={title}
+          path={path}
+          identify={keyed}
+          columns={[
+            { name: "种子词", value: (r) => <KeywordText keyword={r.keyword} /> },
+            { name: "市场", value: (r) => <MarketText market={r.market} /> },
+            { name: "最近研究（UTC）", value: (r) => time(r.collected_at) },
+            ...(canStart
+              ? [
+                  {
+                    name: "操作",
+                    value: (r: Seed) => action("收集指标", () => onJob("keyword_metrics", r.keyword, r.market)),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      );
+    case "expansion":
+      return (
+        <ResearchTable<Suggestion>
+          title="关键词建议"
+          path={path}
+          identify={(r) => `${keyed(r)}/${r.seed}/${r.keyword}/${r.operation}`}
+          columns={[
+            { name: "种子词", value: (r) => <KeywordText keyword={r.seed} /> },
+            { name: "建议关键词", value: (r) => <KeywordText keyword={r.keyword} /> },
+            { name: "拓展方式", value: (r) => sourceLabel(r.operation) },
+            { name: "市场与来源（UTC）", value: (r) => <Scope {...r} /> },
+            {
+              name: "操作",
+              value: (r) => (
+                <div className="flex flex-wrap gap-1">
+                  {canStart && action("收集指标", () => onJob("keyword_metrics", r.keyword, r.market))}
+                  {dataSource(r)}
+                </div>
+              ),
+            },
+          ]}
+        />
       );
     case "keywords":
       return (
@@ -328,6 +331,20 @@ export function ResearchResults({
                 return (
                   <div className="flex flex-wrap gap-1">
                     {canStart && action("研究 SERP", () => onJob("serp_analysis", r.keyword, r.market))}
+                    {writable && (
+                      <Button asChild size="sm" variant="ghost">
+                        <Link
+                          href={href(seoRoutes.content.overview.path, {
+                            site_id: site,
+                            project_id: null,
+                            keyword: r.keyword,
+                            ...marketFilterChanges(r.market),
+                          })}
+                        >
+                          用于内容项目
+                        </Link>
+                      </Button>
+                    )}
                     {intent && action("意图依据", () => onDetail({ kind: "intent", row: { ...r, intent } }))}
                     {dataSource(r)}
                   </div>

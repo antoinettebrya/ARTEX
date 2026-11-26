@@ -13,18 +13,21 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { seoRequest } from "@/lib/seo/client";
-import { initialMarket, type Market, marketLabel, type ResearchJob } from "@/lib/seo/research";
-import { type ResearchView, seoRoutes } from "@/lib/seo/routes";
+import { marketFilterChanges, readMarketFilter } from "@/lib/seo/market";
+import { initialMarket, marketLabel, type ResearchJob } from "@/lib/seo/research";
+import { type ResearchView, researchNavigation, seoRoutes, serpNavigation } from "@/lib/seo/routes";
 
 import { SiteSelector, useSeoLocation, useSiteScope } from "../context";
 import { useSeoSession } from "../session";
 import { ConfirmChange, FilterBar, field, LoadError, PageFrame, PageSkeleton } from "../shared";
+import { WorkflowNav } from "../workflow-nav";
 import { ResearchDetails } from "./details";
 import { type JobDraft, MarketDialog, ResearchJobEditor, SitePageEditor } from "./forms";
 import { type Detail, ResearchResults } from "./tables";
 
 const descriptions: Record<ResearchView, string> = {
-  seeds: "登记种子词并查看已采集的关键词建议。",
+  seeds: "登记种子词并跟踪关键词研究。",
+  expansion: "查看关键词建议、相关搜索和自动补全结果。",
   keywords: "比较搜索量、难度和意图。",
   clusters: "查看关键词分组、推荐 URL 和聚类依据。",
   serps: "查看按市场采集的自然搜索排名。",
@@ -35,43 +38,6 @@ const descriptions: Record<ResearchView, string> = {
   jobs: "跟踪当前站点的研究任务。",
   usage: "查看组织的 DataForSEO 请求和费用记录。",
 };
-
-function readMarketFilter(params: Pick<URLSearchParams, "get">): Market | undefined {
-  const country = params.get("country_code")?.toUpperCase();
-  const location = Number(params.get("location_code"));
-  const language = params.get("language_code");
-  const engine = params.get("search_engine");
-  const device = params.get("device");
-  if (
-    country &&
-    /^[A-Z]{2}$/.test(country) &&
-    Number.isInteger(location) &&
-    location >= 1 &&
-    location <= 100_000_000 &&
-    language &&
-    /^[A-Za-z_-]{2,20}$/.test(language) &&
-    (engine === "google" || engine === "bing") &&
-    (device === "desktop" || device === "mobile")
-  ) {
-    return {
-      country_code: country,
-      location_code: location,
-      language_code: language,
-      search_engine: engine,
-      device,
-    };
-  }
-}
-
-function marketFilterChanges(market?: Market) {
-  return {
-    country_code: market?.country_code ?? null,
-    location_code: market ? String(market.location_code) : null,
-    language_code: market?.language_code ?? null,
-    search_engine: market?.search_engine ?? null,
-    device: market?.device ?? null,
-  };
-}
 
 export function Research({ view }: { view: ResearchView }) {
   const scope = useSiteScope();
@@ -110,12 +76,25 @@ function ResearchWorkspace({ view, scope }: { view: ResearchView; scope: ReturnT
         view !== "usage" &&
         canStart &&
         defaultMarket && (
-          <Button size="sm" type="button" onClick={() => setJob({ kind: "keyword_discovery", market: defaultMarket })}>
+          <Button
+            size="sm"
+            type="button"
+            onClick={() =>
+              setJob({
+                kind: view === "expansion" ? "keyword_suggestions" : "keyword_discovery",
+                market: defaultMarket,
+              })
+            }
+          >
             <Plus /> 创建研究任务
           </Button>
         )
       }
     >
+      {["seeds", "keywords", "expansion", "jobs", "usage"].includes(view) && (
+        <WorkflowNav label="研究工作流" pages={researchNavigation} />
+      )}
+      {(view === "serps" || view === "competitors") && <WorkflowNav label="竞争研究" pages={serpNavigation} />}
       {view !== "usage" && scope.error !== undefined && <LoadError error={scope.error} retry={scope.refresh} />}
       {view !== "usage" && scope.loading && <PageSkeleton />}
       {view !== "usage" && scope.options.length > 0 && (

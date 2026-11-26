@@ -30,7 +30,7 @@ import type { TaskSelection } from "./tasks";
 
 const oauthSession = "artex.execution.oauth";
 const googleCallbackPath = "/seo/execution";
-type GoogleSession = { state: string; site_id: string; connection_id: string; project?: string };
+type GoogleSession = { state: string; site_id: string; connection_id: string; project?: string; returnQuery?: string };
 
 export function useGoogleReturn(owner: boolean) {
   const router = useRouter();
@@ -59,8 +59,9 @@ export function useGoogleReturn(owner: boolean) {
     sessionStorage.removeItem(oauthSession);
 
     const clean = new URL(seoRoutes.sites.connections.path, window.location.origin);
-    clean.searchParams.set("site", pending.site_id);
-    if (pending.project && isID(pending.project)) clean.searchParams.set("project", pending.project);
+    if (pending.returnQuery) clean.search = pending.returnQuery;
+    clean.searchParams.set("site_id", pending.site_id);
+    if (pending.project && isID(pending.project)) clean.searchParams.set("project_id", pending.project);
     function finish() {
       if (new URLSearchParams(window.location.search).get("state") === state) {
         router.replace(`${clean.pathname}${clean.search}`, { scroll: false });
@@ -88,7 +89,7 @@ export function useGoogleReturn(owner: boolean) {
   return owner && !!state && !!(code || authError);
 }
 
-async function startGoogle(connection: Connection, project: string | undefined) {
+async function startGoogle(connection: Connection, project: string | undefined, returnQuery: string | undefined) {
   const { authorization_url, state } = await seoRequest<{ authorization_url: string; state: string }>(
     "/execution/oauth/start",
     { method: "POST", body: { site_id: connection.site_id, connection_id: connection.id } },
@@ -102,7 +103,13 @@ async function startGoogle(connection: Connection, project: string | undefined) 
   ) {
     throw new SeoAPIError(400, "execution_oauth_response");
   }
-  const pending: GoogleSession = { site_id: connection.site_id, connection_id: connection.id, state, project };
+  const pending: GoogleSession = {
+    site_id: connection.site_id,
+    connection_id: connection.id,
+    state,
+    project,
+    returnQuery,
+  };
   sessionStorage.setItem(oauthSession, JSON.stringify(pending));
   window.location.assign(url.href);
 }
@@ -426,14 +433,18 @@ export function ConnectionsPanel({
 }) {
   const [editor, setEditor] = useState<"new" | Connection>();
   const [authorizing, setAuthorizing] = useState<string>();
-  const { projectID, siteID } = useSeoLocation();
+  const { href, projectID, siteID } = useSeoLocation();
   const records = useExecutionRecords<Connection>("connections", site.id, revision);
   const { refresh } = records;
 
   async function authorize(connection: Connection) {
     setAuthorizing(connection.id);
     try {
-      await startGoogle(connection, siteID === connection.site_id ? (projectID ?? undefined) : undefined);
+      await startGoogle(
+        connection,
+        siteID === connection.site_id ? projectID : undefined,
+        href(seoRoutes.sites.connections.path, { site_id: connection.site_id }).split("?", 2)[1],
+      );
     } catch (error) {
       toast.error(errorMessage(error));
       setAuthorizing(undefined);

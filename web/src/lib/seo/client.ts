@@ -73,6 +73,7 @@ const messages: Record<string, string> = {
   conflict: "当前组织已登记相同地址。",
   member_exists: "该邮箱已在当前组织登记。",
   last_owner: "组织需要保留至少一个有效的所有者。",
+  site_scope_mismatch: "此站点与当前筛选范围不匹配。请选择范围内的站点，或清除站群、国家和语言筛选。",
   site_inactive: "仅启用状态的站点可以创建任务。",
   market_not_supported: "当前数据接口不支持此市场组合。",
   research_evidence_missing: "请先收集当前市场的关键词或 SERP 证据。",

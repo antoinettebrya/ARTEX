@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { isID } from "@/lib/seo/client";
-import { SEO_HOME, type SeoRoute, seoAliases, seoRoutes } from "@/lib/seo/routes";
+import { changeSeoQuery, SEO_HOME, type SeoRoute, seoAliases, seoRoutes, seoSelection } from "@/lib/seo/routes";
 
 import { Audit } from "./audit";
 import { ContentStudio } from "./content";
@@ -22,7 +22,7 @@ import { Providers } from "./providers";
 import { Research } from "./research";
 import { useSeoSession } from "./session";
 import { PageFrame, PageSkeleton, StateBadge } from "./shared";
-import { SiteSettings, Sites } from "./sites";
+import { SiteGroups, SiteSettings, Sites } from "./sites";
 
 function SeoRedirect({ href }: { href: string }) {
   const router = useRouter();
@@ -43,11 +43,17 @@ export function SeoEntry({ section, route }: { section: string; route?: SeoRoute
   } else if (section === "content" && params.get("view") === "refresh") {
     target = seoRoutes.content.refresh.path;
     query.delete("view");
-  } else if (section === "jobs" && isID(params.get("site"))) {
+  } else if (section === "content" && !params.has("project_id") && isID(params.get("project"))) {
+    target = seoRoutes.content.project.path;
+  } else if (section === "jobs" && isID(seoSelection(params).site)) {
     query.set("new", "1");
   }
 
-  if (target) return <SeoRedirect href={query.size ? `${target}?${query}` : target} />;
+  if (target) {
+    const { site, project } = seoSelection(params);
+    changeSeoQuery(query, { site_id: site, project_id: project });
+    return <SeoRedirect href={query.size ? `${target}?${query}` : target} />;
+  }
   if (!route) return <SeoRedirect href={SEO_HOME} />;
   return <SeoPage route={route} />;
 }
@@ -84,11 +90,15 @@ export function SeoPage({ route }: { route: SeoRoute }) {
   if (route.section === "sites") {
     if (route.view === "connections") return <ExecutionCenter view="connections" />;
     if (route.view === "settings") return <SiteSettings />;
+    if (route.view === "groups") return <SiteGroups />;
     return <Sites />;
   }
   if (route.section === "research") return <Research view={route.view} />;
   if (route.section === "content") return <ContentStudio view={route.view} />;
-  if (route.section === "execution") return <ExecutionCenter view={route.view} />;
+  if (route.section === "execution") {
+    if (route.view === "logs") return <Audit execution />;
+    return <ExecutionCenter view={route.view} />;
+  }
   if (route.view === "jobs") return <Jobs />;
   if (route.view === "members") return <Members />;
   if (route.view === "audit") return <Audit />;

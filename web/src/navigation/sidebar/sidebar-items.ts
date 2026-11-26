@@ -50,6 +50,7 @@ export interface NavMainLinkItem extends NavItemBase {
 }
 
 export interface NavMainParentItem extends NavItemBase {
+  activePaths?: readonly string[];
   subItems: NavSubItem[];
 }
 
