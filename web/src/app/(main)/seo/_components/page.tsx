@@ -80,23 +80,17 @@ export function SeoPage({ route }: { route: SeoRoute }) {
       </PageFrame>
     );
   }
-  switch (route.section) {
-    case "dashboard":
-      return <Dashboard view={route.view} />;
-    case "sites":
-      if (route.view === "connections") return <ExecutionCenter view="connections" />;
-      if (route.view === "settings") return <SiteSettings />;
-      return <Sites />;
-    case "research":
-      return <Research view={route.view} />;
-    case "content":
-      return <ContentStudio view={route.view} />;
-    case "execution":
-      return <ExecutionCenter view={route.view} />;
-    case "system":
-      if (route.view === "jobs") return <Jobs />;
-      if (route.view === "members") return <Members />;
-      if (route.view === "audit") return <Audit />;
-      return <Providers />;
+  if (route.section === "dashboard") return <Dashboard view={route.view} />;
+  if (route.section === "sites") {
+    if (route.view === "connections") return <ExecutionCenter view="connections" />;
+    if (route.view === "settings") return <SiteSettings />;
+    return <Sites />;
   }
+  if (route.section === "research") return <Research view={route.view} />;
+  if (route.section === "content") return <ContentStudio view={route.view} />;
+  if (route.section === "execution") return <ExecutionCenter view={route.view} />;
+  if (route.view === "jobs") return <Jobs />;
+  if (route.view === "members") return <Members />;
+  if (route.view === "audit") return <Audit />;
+  return <Providers />;
 }

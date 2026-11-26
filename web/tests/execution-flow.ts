@@ -73,7 +73,11 @@ export async function runExecutionFlow({
   await open("/seo/sites/connections");
   await expect(page.getByRole("heading", { name: "CMS 连接", exact: true })).toBeVisible();
   await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
-  async function createConnection(kind: "generic" | "gsc" | "indexnow", name: string, fields: Record<string, string>) {
+  async function createConnection(
+    kind: "generic" | "gsc" | "ga4" | "indexnow",
+    name: string,
+    fields: Record<string, string>,
+  ) {
     await page.getByRole("button", { name: "新建连接", exact: true }).click();
     const editor = page.getByRole("dialog", { name: "新建连接", exact: true });
     await editor.getByLabel("连接类型", { exact: true }).selectOption(kind);
@@ -192,6 +196,12 @@ export async function runExecutionFlow({
   expect(verified.publication.url).toBe(`${siteURL}/existing`);
   expect(verified.publication.target_id).toBe(first.publication.target_id);
   await executionScreenshot(page, "phase4-publishing-verified.png");
+  await open("/seo/dashboard");
+  const totals = page.locator('[aria-label="站点运营指标"]');
+  const metric = (label: string) => totals.getByText(label, { exact: true }).locator("..").locator("dd").first();
+  await expect(metric("发布成功数量")).toHaveText("1");
+  await expect(metric("内容生产数量")).toHaveText("1");
+  await open("/seo/execution/publishing");
 
   await record.getByRole("button", { name: "发布历史", exact: true }).click();
   const history = page.getByRole("dialog", { name: "发布历史", exact: true });
@@ -297,31 +307,36 @@ export async function runExecutionFlow({
     }),
     "unrelated site established before returning from consent",
   );
-  const callback = new URL("/seo/execution", page.url());
-  await page.route(
-    (url) => url.origin === "https://accounts.google.com" && url.pathname === "/o/oauth2/v2/auth",
-    async (route) => {
-      const authorization = new URL(route.request().url());
-      expect(authorization.searchParams.get("client_id")).toBe("phase4-gsc-client");
-      expect(authorization.searchParams.get("redirect_uri")).toBe(configuredCallback);
-      expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
-      callback.searchParams.set("state", authorization.searchParams.get("state") ?? "");
-      callback.searchParams.set("code", "phase4-gsc-code");
-      await route.fulfill({ status: 302, headers: { Location: callback.href } });
-    },
-    { times: 1 },
-  );
-  const exchanged = page.waitForResponse(
-    (res) => new URL(res.url()).pathname === "/seo/api/execution/oauth/exchange" && res.request().method() === "POST",
-  );
-  await connectionTable
-    .getByRole("row")
-    .filter({ hasText: searchConnection })
-    .getByRole("button", { name: "授权 Google", exact: true })
-    .click();
-  expect((await exchanged).ok(), "exchange approved fixture Google authorization").toBe(true);
-  await expect(page).toHaveURL((url) => url.pathname === "/seo/sites/connections" && url.search === `?site=${siteID}`);
-  await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+  async function authorizeGoogle(kind: "gsc" | "ga4", name: string) {
+    const callback = new URL("/seo/execution", page.url());
+    await page.route(
+      (url) => url.origin === "https://accounts.google.com" && url.pathname === "/o/oauth2/v2/auth",
+      async (route) => {
+        const authorization = new URL(route.request().url());
+        expect(authorization.searchParams.get("client_id")).toBe(`phase4-${kind}-client`);
+        expect(authorization.searchParams.get("redirect_uri")).toBe(configuredCallback);
+        expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+        callback.searchParams.set("state", authorization.searchParams.get("state") ?? "");
+        callback.searchParams.set("code", `phase4-${kind}-code`);
+        await route.fulfill({ status: 302, headers: { Location: callback.href } });
+      },
+      { times: 1 },
+    );
+    const exchanged = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === "/seo/api/execution/oauth/exchange" && res.request().method() === "POST",
+    );
+    await connectionTable
+      .getByRole("row")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "授权 Google", exact: true })
+      .click();
+    expect((await exchanged).ok(), "exchange approved fixture Google authorization").toBe(true);
+    await expect(page).toHaveURL(
+      (url) => url.pathname === "/seo/sites/connections" && url.search === `?site=${siteID}`,
+    );
+    await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+  }
+  await authorizeGoogle("gsc", searchConnection);
 
   await open("/seo/execution/analytics");
   await page.getByRole("button", { name: "同步报告", exact: true }).click({ timeout: 10000 });
@@ -361,6 +376,27 @@ export async function runExecutionFlow({
   await inspection.getByLabel("目标 URL", { exact: true }).fill(`${siteURL}/existing`);
   await submitTask("检查 URL");
   await expect(index.getByRole("row").filter({ hasText: "Submitted and indexed" })).toContainText("已索引");
+
+  await open("/seo/sites/connections");
+  const analyticsConnection = "Phase 4 GA4 验收";
+  await createConnection("ga4", analyticsConnection, {
+    "GA4 属性 ID": "properties/54321",
+    "Google 客户端 ID": "phase4-ga4-client",
+    "Google 客户端密钥": "phase4-ga4-secret",
+    "Google 授权回调地址": configuredCallback,
+  });
+  await authorizeGoogle("ga4", analyticsConnection);
+  await open("/seo/execution/ga4");
+  await page.getByRole("button", { name: "同步报告", exact: true }).click();
+  const ga4Report = page.getByRole("dialog", { name: "同步 Google Analytics 4", exact: true });
+  await ga4Report.getByLabel("开始日期", { exact: true }).fill(reportDay);
+  await ga4Report.getByLabel("结束日期", { exact: true }).fill(reportDay);
+  await submitTask("同步 Google Analytics 4");
+  await open("/seo/dashboard");
+  await expect(metric("GSC 点击")).toHaveText("12,012");
+  await expect(metric("GSC 展示")).toHaveText("84,084");
+  await expect(metric("自然搜索流量")).toHaveText("17");
+  await executionScreenshot(page, "phase4-dashboard-data.png");
 
   for (const [path, table] of [
     ["/seo/execution/ga4", "GA4 自然搜索指标"],

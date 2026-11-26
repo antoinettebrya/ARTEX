@@ -51,7 +51,7 @@ type Metric = { label: string; value?: string | number; detail?: string };
 
 function MetricGrid({ label, metrics }: { label: string; metrics: Metric[] }) {
   return (
-    <dl aria-label={label} className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+    <dl aria-label={label} className="grid grid-cols-2 gap-3 lg:grid-cols-3">
       {metrics.map(({ label, value, detail }) => (
         <Card key={label} className="grid min-w-0 gap-1 p-3">
           <dt className="text-muted-foreground text-sm">{label}</dt>
@@ -300,8 +300,11 @@ function Overview() {
 function Health() {
   const sites = useSeoList<Site>("sites");
   const jobs = useSeoQuery<{ jobs: Job[] }>("/jobs?limit=200");
-  const { href } = useSeoLocation();
+  const { href, siteID } = useSeoLocation();
   const latest = new Map<string, Job>();
+  let noJob = "暂无近期任务";
+  if (jobs.loading) noJob = "正在读取";
+  if (jobs.error !== undefined) noJob = "读取失败";
   for (const job of jobs.data?.jobs ?? []) {
     if (!latest.has(job.site_id)) latest.set(job.site_id, job);
   }
@@ -321,7 +324,10 @@ function Health() {
               <TableCell className="px-3 py-2">
                 <Link
                   className="font-medium hover:underline"
-                  href={href(seoRoutes.sites.settings.path, { site: site.id, project: null })}
+                  href={href(seoRoutes.sites.settings.path, {
+                    site: site.id,
+                    project: siteID === site.id ? undefined : null,
+                  })}
                 >
                   {site.name}
                 </Link>
@@ -338,12 +344,8 @@ function Health() {
                     <JobLink job={job} />
                     <JobStatus job={job} />
                   </div>
-                ) : jobs.loading ? (
-                  "正在读取"
-                ) : jobs.error !== undefined ? (
-                  "读取失败"
                 ) : (
-                  "暂无近期任务"
+                  noJob
                 )}
               </TableCell>
             </TableRow>

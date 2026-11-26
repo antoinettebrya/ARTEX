@@ -309,6 +309,16 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page.getByRole("button", { name: "预览 CMS 发布包", exact: true })).toHaveCount(0);
   expect((await fetchWorkspace()).publications ?? []).toHaveLength(0);
   await screenshot(page, "phase3-quality-review.png");
+  await page.goto(`/seo/dashboard/inbox?site=${siteID}&project=${projectID}`);
+  const pending = page.getByRole("table", { name: "待审核文章", exact: true });
+  await expect(pending).toContainText(keyword);
+  await pending.getByRole("link", { name: "打开质量审核", exact: true }).click();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === "/seo/content/quality" &&
+      url.searchParams.get("site") === siteID &&
+      url.searchParams.get("project") === projectID,
+  );
   await page.getByRole("button", { name: "批准当前文章", exact: true }).click();
   const approval = page.getByRole("dialog", { name: "批准当前文章", exact: true });
   await approval.getByLabel("审批意见", { exact: true }).fill("已核对本地采集证据与文章版本。");

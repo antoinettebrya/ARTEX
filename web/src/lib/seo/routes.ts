@@ -6,6 +6,18 @@ import { isID, type Role } from "./client";
 
 type RouteDefinition = { path: string; title: string; ownerOnly?: boolean; planned?: string };
 
+export type ResearchView =
+  | "seeds"
+  | "keywords"
+  | "clusters"
+  | "serps"
+  | "competitors"
+  | "intents"
+  | "mappings"
+  | "opportunities"
+  | "jobs"
+  | "usage";
+
 export const seoRoutes = {
   dashboard: {
     overview: { path: "/seo/dashboard", title: "运营总览" },
@@ -30,7 +42,7 @@ export const seoRoutes = {
     opportunities: { path: "/seo/research/opportunities", title: "关键词机会" },
     jobs: { path: "/seo/research/history", title: "研究历史" },
     usage: { path: "/seo/research/usage", title: "数据用量", ownerOnly: true },
-  },
+  } satisfies Record<ResearchView, RouteDefinition>,
   content: {
     overview: { path: "/seo/content", title: "内容项目" },
     strategy: { path: "/seo/content/strategy", title: "内容策略" },
@@ -86,11 +98,16 @@ export const seoRoutes = {
 
 type Section = keyof typeof seoRoutes;
 type View<S extends Section> = keyof (typeof seoRoutes)[S];
-export type ResearchView = View<"research">;
 export type ContentView = View<"content">;
 export type ExecutionView = View<"execution">;
 export type DashboardView = View<"dashboard">;
-type RouteSelection = { [S in Section]: { section: S; view: View<S> } }[Section];
+type RouteSelection =
+  | { section: "dashboard"; view: DashboardView }
+  | { section: "sites"; view: View<"sites"> }
+  | { section: "research"; view: ResearchView }
+  | { section: "content"; view: ContentView }
+  | { section: "execution"; view: ExecutionView }
+  | { section: "system"; view: View<"system"> };
 export type SeoRoute = RouteSelection & RouteDefinition;
 
 const sections = {

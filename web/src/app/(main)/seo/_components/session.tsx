@@ -11,7 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage, type Principal, roles, SeoAPIError, seoRequest } from "@/lib/seo/client";
-import { SEO_HOME, safeSeoReturn, seoGroups } from "@/lib/seo/routes";
+import { SEO_HOME, safeSeoReturn, seoGroups, seoHref } from "@/lib/seo/routes";
 
 import { useSeoQuery } from "./query";
 
@@ -80,7 +80,7 @@ export function SeoSession({ children }: { children: ReactNode }) {
       <AppShell
         user={user}
         navigation={{
-          home: SEO_HOME,
+          home: seoHref(SEO_HOME, pathname, params),
           title: "ARTEX SEO OS",
           groups: seoGroups(principal.role, pathname, params),
           onLogout: logOut,

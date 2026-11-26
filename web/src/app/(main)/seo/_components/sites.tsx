@@ -35,7 +35,7 @@ export const siteStates = { active: "启用", paused: "暂停", archived: "归�
 
 export function Sites() {
   const { principal } = useSeoSession();
-  const { href } = useSeoLocation();
+  const { href, siteID } = useSeoLocation();
   const writable = principal.role !== "viewer";
   const list = useSeoList<Site>("sites");
   const [edit, setEdit] = useState<Site | null>();
@@ -62,7 +62,10 @@ export function Sites() {
           <TableRow key={site.id}>
             <TableCell className="px-3 py-2">
               <Link
-                href={href(seoRoutes.research.seeds.path, { site: site.id, project: null })}
+                href={href(seoRoutes.research.seeds.path, {
+                  site: site.id,
+                  project: siteID === site.id ? undefined : null,
+                })}
                 className="font-medium hover:underline"
               >
                 {site.name}
@@ -82,7 +85,11 @@ export function Sites() {
                   {site.status === "active" && (
                     <Button asChild variant="ghost" size="sm">
                       <Link
-                        href={href(seoRoutes.system.jobs.path, { site: site.id, project: null, new: "1" })}
+                        href={href(seoRoutes.system.jobs.path, {
+                          site: site.id,
+                          project: siteID === site.id ? undefined : null,
+                          new: "1",
+                        })}
                         aria-label={`为 ${site.name} 创建任务`}
                       >
                         <ClipboardPlus /> 创建任务
