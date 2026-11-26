@@ -11,7 +11,7 @@ install -d -m 0700 "$config/backup-gpg"
 timestamp=$(date -u +%Y%m%dT%H%M%S)
 temp=$(mktemp "$backup/.seoos-$timestamp-XXXXXXXX")
 trap 'rm -f "$temp"' EXIT
-bash "$deploy/compose.sh" exec -T postgres pg_dump -U seoos -d seoos -Fc |
+bash "$deploy/compose.sh" exec -T postgres pg_dump -U seoos -d seoos -Fc </dev/null |
     gpg --homedir "$config/backup-gpg" --batch --yes --pinentry-mode loopback --passphrase-file "$config/backup-key" \
         --cipher-algo AES256 --compress-algo none --symmetric --output "$temp"
 test -s "$temp"

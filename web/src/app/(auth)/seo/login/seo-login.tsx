@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { useRouter } from "next/navigation";
 
@@ -13,8 +13,11 @@ import { errorMessage, seoRequest } from "@/lib/seo/client";
 
 export function SeoLogin() {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => setReady(true), []);
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,13 +34,14 @@ export function SeoLogin() {
   }
 
   return (
-    <form onSubmit={signIn} className="flex flex-col gap-4">
+    <form method="post" onSubmit={signIn} className="flex flex-col gap-4">
       <div className="space-y-1.5">
         <Label htmlFor="seo-access-token">访问凭据</Label>
         <Input
           id="seo-access-token"
           name="token"
           type="password"
+          disabled={!ready || pending}
           required
           minLength={32}
           maxLength={512}
@@ -49,7 +53,7 @@ export function SeoLogin() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      <Button type="submit" className="w-full" disabled={pending}>
+      <Button type="submit" className="w-full" disabled={!ready || pending}>
         {pending && <Spinner />} {pending ? "登录中…" : "登录"}
       </Button>
     </form>

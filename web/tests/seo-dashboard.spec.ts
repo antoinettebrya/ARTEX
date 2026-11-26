@@ -15,6 +15,19 @@ async function signIn(page: Page, token: string) {
   await expect(page.getByRole("table", { name: "已登记站点" })).toBeVisible();
 }
 
+test("SEO login disables credential submission before JavaScript is ready", async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    await page.goto("/seo/login");
+    await expect(page.locator("form")).toHaveAttribute("method", "post");
+    await expect(page.getByLabel("访问凭据", { exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "登录", exact: true })).toBeDisabled();
+  } finally {
+    await context.close();
+  }
+});
+
 test("shared ARTEX shell operates on the real SEO API", async ({ page, browser, request }) => {
   const { token, api } = testCredentials();
   const legacyRequests: string[] = [];
