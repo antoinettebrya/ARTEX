@@ -36,7 +36,7 @@ npm run build:static
 
 ## LIVE_PROVIDER · Phase 4.1
 
-Google Cloud 两次拒绝创建新隔离项目的 OAuth 配置。控制台显示「创建 OAuth 配置时出错」，独立 Web OAuth Client 尚未生成。因此首次 GSC 授权、GA4 增量授权、旧刷新令牌是否扩权和新令牌实际签发情况未取得本阶段的真实回执。不同 Google 账号的拒绝、撤销后重新授权与逐站恢复已在本地用签名 JWT、HTTP 和 PostgreSQL 覆盖。Bing 与 IndexNow 本阶段未再次向外部服务提交 URL。
+Google Cloud 控制台曾两次拒绝创建 OAuth 配置，连接恢复后已完成隔离项目的品牌配置。Web OAuth 客户端和测试用户访问仍待批准。首次 GSC 授权、GA4 增量授权、旧刷新令牌是否扩权和新令牌实际签发情况尚无本阶段的真实回执。不同 Google 账号的拒绝、撤销后重新授权与逐站恢复已在本地用签名 JWT、HTTP 和 PostgreSQL 覆盖。Bing 与 IndexNow 本阶段未再次向外部服务提交 URL。
 
 真实联调使用隔离的 Google Cloud 项目、Web OAuth 客户端、已授权的测试用户，以及已启用的 Search Console API 和 Analytics Admin API。登记回调 `http://127.0.0.1:42821/seo/api/integrations/oauth/callback/google`。用仅当前用户可读的文件保存 `client_id`、`client_secret` 和 `isolated_project: true`，将文件路径提供给下列测试。测试会在 GSC 和 GA4 两次授权时分别输出可在 Chrome 打开的本地入口。它检验真实 Google 签发的身份、增量后的两个读取范围、是否签发和替换刷新令牌，并探测旧刷新令牌。
 
