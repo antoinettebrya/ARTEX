@@ -23,7 +23,9 @@ CMS 写入需要启用连接写权限，并由所有者单独操作。审批包�
 | Bing Webmaster | 使用已验证站点的 Bing Webmaster API Key。读取站点、Sitemap、站点日趋势、查询与页面数据，保留各报告粒度。开启写权限后支持检查提交额度和提交 URL。 |
 | IndexNow | 所有者为站点登记同域 HTTPS key 文件。Worker 读取并校验文件后提交目标 URL，保存 HTTP 和平台状态。HTTP 202 记录为等待平台验证 key。 |
 
-Google 授权回调使用后台的 HTTPS `/seo/execution`。OAuth state 与组织、站点、连接、版本绑定，10 分钟内只可消费一次，授权码由 S256 PKCE 保护。Access Token 过期时使用加密 Refresh Token 刷新。应用先把数据写入站点与连接隔离的日快照，支持按日期、页面和国家筛选。GSC 国家使用三字代码，GA4 使用 API 返回的国家显示名。默认同步最近 14 个可查日期，后续利用最近的日快照并重叠两天来吸收更新。手动单次同步范围最多 31 天。GSC 和 GA4 每页 1,000 行。达到单任务读取上限或 GA4 告知部分数据时，会在结果标记 `truncated`。可按较短日期范围重取报告。GSC `position` 是 Google 返回的平均排名，Bing 的站点、查询和页面数据应分别读取。 [Search Analytics](https://developers.google.com/webmaster-tools/v1/searchanalytics/query) · [URL Inspection](https://developers.google.com/webmaster-tools/v1/urlInspection.index/inspect) · [GA4 Data API](https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/runReport) · [Bing API](https://learn.microsoft.com/en-us/bingwebmaster/api-protocols)
+新建 Google 连接时，在 Google Cloud Web 客户端的已授权重定向 URI 中登记后台的 HTTPS `/seo/api/integrations/oauth/callback/google`。从「站点管理 → CMS 连接」发起授权。后台把授权会话与发起请求的 ARTEX 会话、站点和连接绑定，服务端换取 Token，再跳回对应站点。跳转地址不会携带授权码，反向代理的访问日志应只记录路径。现有配置的 HTTPS `/seo/execution` 回调仍可继续使用。
+
+OAuth state 与组织、站点、连接、版本绑定，10 分钟内只可消费一次，授权码由 S256 PKCE 保护。Access Token 过期时使用加密 Refresh Token 刷新。应用先把数据写入站点与连接隔离的日快照，支持按日期、页面和国家筛选。GSC 国家使用三字代码，GA4 使用 API 返回的国家显示名。默认同步最近 14 个可查日期，后续利用最近的日快照并重叠两天来吸收更新。手动单次同步范围最多 31 天。GSC 和 GA4 每页 1,000 行。达到单任务读取上限或 GA4 告知部分数据时，会在结果标记 `truncated`。可按较短日期范围重取报告。GSC `position` 是 Google 返回的平均排名，Bing 的站点、查询和页面数据应分别读取。 [Search Analytics](https://developers.google.com/webmaster-tools/v1/searchanalytics/query) · [URL Inspection](https://developers.google.com/webmaster-tools/v1/urlInspection.index/inspect) · [GA4 Data API](https://developers.google.com/analytics/devguides/reporting/data/v1/rest/v1beta/properties/runReport) · [Bing API](https://learn.microsoft.com/en-us/bingwebmaster/api-protocols)
 
 同时有近期和此前两个七天窗口的足量页面数据时，系统将同站目标页的 CTR、按展示加权的平均排名变化或自然会话变化写回 Phase 3 项目，供编辑人员评估更新。
 

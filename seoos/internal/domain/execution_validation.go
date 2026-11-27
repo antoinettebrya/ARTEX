@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 )
 
+const GoogleOAuthCallbackPath = "/seo/api/integrations/oauth/callback/google"
+
 func (in ExecutionConnectionInput) Normalize(site Site) (ExecutionConnectionInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.SiteID != site.ID || in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 120 || hasControl(in.Name) {
@@ -102,9 +104,9 @@ func (in ExecutionConnectionInput) Normalize(site Site) (ExecutionConnectionInpu
 		}
 		if in.RedirectURI != "" {
 			callback, err := EvidenceURL(in.RedirectURI)
-			if err != nil || callback.Scheme != "https" || callback.RawQuery != "" ||
-				strings.TrimSuffix(callback.Path, "/") != "/seo/execution" {
-				return in, invalid("redirect_uri", "use the registered HTTPS execution page as callback")
+			if err != nil || callback.Scheme != "https" || callback.RawQuery != "" || callback.ForceQuery ||
+				(callback.EscapedPath() != GoogleOAuthCallbackPath && strings.TrimSuffix(callback.EscapedPath(), "/") != "/seo/execution") {
+				return in, invalid("redirect_uri", "use the registered HTTPS Google OAuth callback")
 			}
 		}
 	} else if in.RedirectURI != "" {

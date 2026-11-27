@@ -50,3 +50,38 @@ func TestWordPressCredentialIdentifiesMissingUsername(t *testing.T) {
 		t.Fatalf("expected a username validation error: %v", err)
 	}
 }
+
+func TestGoogleConnectionRedirects(t *testing.T) {
+	site := Site{ID: "search-site", BaseURL: "https://search.example.test"}
+	const console = "https://console.example.test"
+	for _, path := range []string{GoogleOAuthCallbackPath, "/seo/execution", "/seo/execution/"} {
+		for _, kind := range []struct{ service, property string }{
+			{ExecutionGSC, "sc-domain:search.example.test"},
+			{ExecutionGA4, "properties/12345"},
+		} {
+			input := ExecutionConnectionInput{SiteID: site.ID, Name: "Google", Kind: kind.service,
+				Property: kind.property, RedirectURI: console + path}
+			got, err := input.Normalize(site)
+			if err != nil || got.RedirectURI != input.RedirectURI {
+				t.Errorf("%s with redirect %s: %v", kind.service, path, err)
+			}
+		}
+	}
+	for _, redirect := range []string{
+		console + GoogleOAuthCallbackPath + "/",
+		console + GoogleOAuthCallbackPath + "?",
+		console + GoogleOAuthCallbackPath + "?state=external",
+		console + GoogleOAuthCallbackPath + "#unexpected",
+		console + "/seo/api/integrations/oauth/callback/%67oogle",
+		console + "/seo/api/integrations/oauth/callback/bing",
+		"http://console.example.test" + GoogleOAuthCallbackPath,
+	} {
+		input := ExecutionConnectionInput{SiteID: site.ID, Name: "Google", Kind: ExecutionGSC,
+			Property: "sc-domain:search.example.test", RedirectURI: redirect}
+		_, err := input.Normalize(site)
+		var field *ValidationError
+		if !errors.As(err, &field) || field.Field != "redirect_uri" {
+			t.Errorf("unexpected result for callback %s: %v", redirect, err)
+		}
+	}
+}

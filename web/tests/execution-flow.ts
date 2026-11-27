@@ -1,5 +1,6 @@
 import { type APIRequestContext, type APIResponse, expect, type Page } from "@playwright/test";
 
+import { googleOAuthCallbackPath } from "../src/lib/seo/google-oauth";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -296,7 +297,13 @@ export async function runExecutionFlow({
 
   await open("/seo/sites/connections");
   const searchConnection = "Phase 4 Search Console 验收";
-  const configuredCallback = "https://artex-fixture.example.test/seo/execution";
+  const configuredCallback = `https://artex-fixture.example.test${googleOAuthCallbackPath}`;
+  const legacyCallback = "https://artex-fixture.example.test/seo/execution";
+  const missingCallback = await page.request.get(googleOAuthCallbackPath);
+  expect(missingCallback.status()).toBe(400);
+  expect(await missingCallback.json()).toEqual({ error: { code: "invalid_google_callback" } });
+  const unboundCallback = await page.request.get(`${googleOAuthCallbackPath}?state=${"a".repeat(43)}&code=fixture`);
+  expect(unboundCallback.status()).toBe(403);
   await createConnection("gsc", searchConnection, {
     "资源地址或 sc-domain": `sc-domain:${new URL(siteURL).hostname}`,
     "Google 客户端 ID": "phase4-gsc-client",
@@ -318,13 +325,14 @@ export async function runExecutionFlow({
     "unrelated site established before returning from consent",
   );
   async function authorizeGoogle(kind: "gsc" | "ga4", name: string) {
-    const callback = new URL("/seo/execution", page.url());
+    const registered = kind === "gsc" ? configuredCallback : legacyCallback;
+    const callback = new URL(new URL(registered).pathname, page.url());
     await page.route(
       (url) => url.origin === "https://accounts.google.com" && url.pathname === "/o/oauth2/v2/auth",
       async (route) => {
         const authorization = new URL(route.request().url());
         expect(authorization.searchParams.get("client_id")).toBe(`phase4-${kind}-client`);
-        expect(authorization.searchParams.get("redirect_uri")).toBe(configuredCallback);
+        expect(authorization.searchParams.get("redirect_uri")).toBe(registered);
         expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
         callback.searchParams.set("state", authorization.searchParams.get("state") ?? "");
         callback.searchParams.set("code", `phase4-${kind}-code`);
@@ -332,19 +340,40 @@ export async function runExecutionFlow({
       },
       { times: 1 },
     );
-    const exchanged = page.waitForResponse(
-      (res) => new URL(res.url()).pathname === "/seo/api/execution/oauth/exchange" && res.request().method() === "POST",
-    );
+    const exchanged = page.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname;
+      return kind === "gsc"
+        ? path === googleOAuthCallbackPath && response.request().method() === "GET"
+        : path === "/seo/api/execution/oauth/exchange" && response.request().method() === "POST";
+    });
     await connectionTable
       .getByRole("row")
       .filter({ hasText: name })
       .getByRole("button", { name: "授权 Google", exact: true })
       .click();
-    expect((await exchanged).ok(), "exchange approved fixture Google authorization").toBe(true);
+    const response = await exchanged;
+    if (kind === "gsc") {
+      expect(response.status()).toBe(303);
+      const after = new URL(response.headers().location, response.url());
+      expect(after.origin).toBe(callback.origin);
+      expect(after.pathname).toBe("/seo/sites/connections");
+      expect(after.search).toBe(`?site_id=${siteID}&google_oauth=connected`);
+      expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+      expect(response.headers()["cache-control"]).toBe("no-store");
+    } else {
+      expect(response.ok(), "exchange legacy Google callback").toBe(true);
+    }
     await expect(page).toHaveURL(
       (url) => url.pathname === "/seo/sites/connections" && url.search === `?site_id=${siteID}`,
     );
     await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+    if (kind === "gsc") {
+      const replay = await page.request.get(callback.href, { maxRedirects: 0 });
+      expect(replay.status()).toBe(403);
+      expect(
+        (await page.context().cookies()).some((cookie) => cookie.name.startsWith("__Host-artex_seo_google_")),
+      ).toBe(false);
+    }
   }
   await authorizeGoogle("gsc", searchConnection);
 
@@ -396,7 +425,7 @@ export async function runExecutionFlow({
     "GA4 属性 ID": "properties/54321",
     "Google 客户端 ID": "phase4-ga4-client",
     "Google 客户端密钥": "phase4-ga4-secret",
-    "Google 授权回调地址": configuredCallback,
+    "Google 授权回调地址": legacyCallback,
   });
   await authorizeGoogle("ga4", analyticsConnection);
   await open("/seo/execution/ga4");

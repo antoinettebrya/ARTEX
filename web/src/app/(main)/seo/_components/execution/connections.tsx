@@ -21,6 +21,7 @@ import {
   isCMS,
   isGoogle,
 } from "@/lib/seo/execution";
+import { googleOAuthCallbackPath, googleOAuthResultKey } from "@/lib/seo/google-oauth";
 import { seoRoutes } from "@/lib/seo/routes";
 
 import { useSeoLocation } from "../context";
@@ -29,7 +30,6 @@ import { useExecutionRecords } from "./records";
 import type { TaskSelection } from "./tasks";
 
 const oauthSession = "artex.execution.oauth";
-const googleCallbackPath = "/seo/execution";
 type GoogleSession = { state: string; site_id: string; connection_id: string; project?: string; returnQuery?: string };
 
 export function useGoogleReturn(owner: boolean) {
@@ -38,12 +38,17 @@ export function useGoogleReturn(owner: boolean) {
   const state = params.get("state");
   const code = params.get("code");
   const authError = params.get("error");
+  const returned = params.get(googleOAuthResultKey);
+  const outcome = returned === "connected" || returned === "cancelled" || returned === "failed" ? returned : null;
+  const resultSite = params.get("site_id");
   const returnTo = href(seoRoutes.sites.connections.path);
   const handled = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!owner || !state || (!code && !authError) || handled.current === state) return;
-    handled.current = state;
+    const legacyMarker = state && (code || authError) ? state : null;
+    const marker = outcome ? `${resultSite}/${outcome}` : legacyMarker;
+    if (!owner || !marker || handled.current === marker) return;
+    handled.current = marker;
 
     let pending: GoogleSession | undefined;
     try {
@@ -51,7 +56,12 @@ export function useGoogleReturn(owner: boolean) {
     } catch {
       // An expired or unavailable browser session cannot complete authorization.
     }
-    if (!pending || pending.state !== state || !isID(pending.site_id) || !isID(pending.connection_id)) {
+    if (
+      !pending ||
+      !isID(pending.site_id) ||
+      !isID(pending.connection_id) ||
+      (outcome ? pending.site_id !== resultSite : pending.state !== state)
+    ) {
       toast.error("Google 授权会话已失效，请重新授权。");
       router.replace(returnTo, { scroll: false });
       return;
@@ -60,15 +70,25 @@ export function useGoogleReturn(owner: boolean) {
 
     const clean = new URL(seoRoutes.sites.connections.path, window.location.origin);
     if (pending.returnQuery) clean.search = pending.returnQuery;
+    for (const parameter of ["state", "code", "error", googleOAuthResultKey]) clean.searchParams.delete(parameter);
     clean.searchParams.set("site_id", pending.site_id);
     if (pending.project && isID(pending.project)) clean.searchParams.set("project_id", pending.project);
     function finish() {
-      if (new URLSearchParams(window.location.search).get("state") === state) {
+      const current = new URLSearchParams(window.location.search);
+      if (outcome ? current.get(googleOAuthResultKey) === outcome : current.get("state") === state) {
         router.replace(`${clean.pathname}${clean.search}`, { scroll: false });
       }
     }
 
-    if (authError || !code) {
+    if (outcome) {
+      if (outcome === "connected") toast.success("Google 账号已授权");
+      else if (outcome === "cancelled") toast.error("Google 授权已取消或未完成。");
+      else toast.error("Google 授权未完成，请重新发起授权。");
+      finish();
+      return;
+    }
+
+    if (authError || !code || !state) {
       toast.error("Google 授权已取消或未完成。");
       finish();
       return;
@@ -84,9 +104,9 @@ export function useGoogleReturn(owner: boolean) {
       })
       .catch((error: unknown) => toast.error(errorMessage(error)))
       .finally(finish);
-  }, [authError, code, owner, returnTo, router, state]);
+  }, [authError, code, outcome, owner, resultSite, returnTo, router, state]);
 
-  return owner && !!state && !!(code || authError);
+  return owner && (!!outcome || (!!state && !!(code || authError)));
 }
 
 async function startGoogle(connection: Connection, project: string | undefined, returnQuery: string | undefined) {
@@ -165,7 +185,8 @@ function ConnectionEditor({
     wordpress: "WordPress 应用程序密码",
     generic: "CMS 访问令牌",
   };
-  const defaultReturn = typeof window === "undefined" ? "" : new URL(googleCallbackPath, window.location.origin).href;
+  const defaultReturn =
+    typeof window === "undefined" ? "" : new URL(googleOAuthCallbackPath, window.location.origin).href;
 
   return (
     <FormDialog

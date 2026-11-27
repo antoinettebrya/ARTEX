@@ -2,9 +2,17 @@ import "server-only";
 
 import { type NextRequest, NextResponse } from "next/server";
 
+import { googleOAuthCallbackPath, googleOAuthResultKey } from "./google-oauth";
+import { seoRoutes } from "./routes";
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 const SESSION_COOKIE = "artex_seo_session";
 const ACCEPTED_TOKEN = /^[\x21-\x7e]{32,512}$/;
 const ID = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
+const uuid = new RegExp(`^${ID}$`);
+const googleOAuthState = /^[A-Za-z0-9_-]{43}$/;
+const googleCallback = googleOAuthCallbackPath.slice("/seo/api".length);
+const googleCookiePrefix = "__Host-artex_seo_google_";
 const sitePath = new RegExp(`^/sites/${ID}$`);
 const jobPath = new RegExp(`^/jobs/${ID}$`);
 const providerPath = new RegExp(`^/providers/${ID}$`);
@@ -61,6 +69,8 @@ const contentLists = new Set([
 ]);
 const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/seo", maxAge: 8 * 60 * 60 } as const;
+const googleCookieOptions = { ...cookieOptions, path: "/", maxAge: 600 };
+const callbackHeaders = { ...headers, "Referrer-Policy": "no-referrer" };
 const maxBodyBytes = 64 * 1024;
 const maxExecutionJobBodyBytes = 6 * 1024 * 1024;
 
@@ -218,7 +228,104 @@ async function session(request: NextRequest, origin: string) {
   return response;
 }
 
+function googlePendingSignature(token: string, state: string, site: string, connection: string) {
+  return createHmac("sha256", token).update(`artex:google-oauth-v1:${state}:${site}:${connection}`).digest("base64url");
+}
+
+async function googlePendingCookie(response: Response, body: string, token: string) {
+  const { state, authorization_url } = (await response.json()) as { state?: unknown; authorization_url?: unknown };
+  const { site_id, connection_id } = JSON.parse(body) as { site_id?: unknown; connection_id?: unknown };
+  if (
+    typeof state !== "string" ||
+    !googleOAuthState.test(state) ||
+    typeof authorization_url !== "string" ||
+    typeof site_id !== "string" ||
+    !uuid.test(site_id) ||
+    typeof connection_id !== "string" ||
+    !uuid.test(connection_id)
+  ) {
+    return;
+  }
+  const authorize = new URL(authorization_url);
+  const redirect = authorize.searchParams.get("redirect_uri");
+  if (
+    !redirect ||
+    authorize.origin !== "https://accounts.google.com" ||
+    authorize.searchParams.get("state") !== state
+  ) {
+    return;
+  }
+  const callback = new URL(redirect);
+  if (
+    callback.protocol !== "https:" ||
+    callback.pathname !== googleOAuthCallbackPath ||
+    callback.search ||
+    callback.hash
+  )
+    return;
+  const signature = googlePendingSignature(token, state, site_id, connection_id);
+  return { name: googleCookiePrefix + state, value: `${site_id}.${connection_id}.${signature}` };
+}
+
+function googleCallbackProblem(status: number, code: string) {
+  return NextResponse.json({ error: { code } }, { status, headers: callbackHeaders });
+}
+
+async function googleBrowserCallback(request: NextRequest, origin: string) {
+  if (request.method !== "GET") {
+    return new NextResponse(null, { status: 405, headers: { ...callbackHeaders, Allow: "GET" } });
+  }
+  const params = request.nextUrl.searchParams;
+  const states = params.getAll("state");
+  const codes = params.getAll("code");
+  const errors = params.getAll("error");
+  const [state] = states;
+  const [code] = codes;
+  const [providerError] = errors;
+  const hasGrant = codes.length === 1 && /^[\x21-\x7e]{1,4096}$/.test(code) && errors.length === 0;
+  const hasError = errors.length === 1 && /^[a-zA-Z_]{1,64}$/.test(providerError) && codes.length === 0;
+  if (states.length !== 1 || !googleOAuthState.test(state) || (!hasGrant && !hasError)) {
+    return googleCallbackProblem(400, "invalid_google_callback");
+  }
+
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token || !ACCEPTED_TOKEN.test(token)) return googleCallbackProblem(401, "unauthorized");
+  const cookie = googleCookiePrefix + state;
+  const tuple = request.cookies.get(cookie)?.value.split(".") ?? [];
+  const [site, connection, signature] = tuple;
+  if (tuple.length !== 3 || !uuid.test(site) || !uuid.test(connection) || !googleOAuthState.test(signature)) {
+    return googleCallbackProblem(403, "invalid_google_state");
+  }
+  const expected = googlePendingSignature(token, state, site, connection);
+  if (!timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+    return googleCallbackProblem(403, "invalid_google_state");
+  }
+
+  let result = providerError === "access_denied" ? "cancelled" : "failed";
+  if (hasGrant) {
+    try {
+      const response = await upstream(
+        origin,
+        "/execution/oauth/exchange",
+        token,
+        "POST",
+        JSON.stringify({ site_id: site, connection_id: connection, code, state }),
+      );
+      if (response.ok && ((await response.json()) as { connected?: unknown }).connected === true) result = "connected";
+    } catch {
+      // Send a safe result back even if the API aborts or returns malformed data.
+    }
+  }
+
+  const destination = new URL(seoRoutes.sites.connections.path, request.nextUrl.origin);
+  destination.search = new URLSearchParams({ site_id: site, [googleOAuthResultKey]: result }).toString();
+  const response = NextResponse.redirect(destination, { status: 303, headers: callbackHeaders });
+  response.cookies.set(cookie, "", { ...googleCookieOptions, maxAge: 0 });
+  return response;
+}
+
 export async function seoProxy(request: NextRequest, origin: string, path: string) {
+  if (path === googleCallback) return googleBrowserCallback(request, origin);
   const method = request.method;
   if (method !== "GET" && method !== "HEAD" && !sameOrigin(request)) {
     return problem(403, "forbidden_origin");
@@ -235,10 +342,16 @@ export async function seoProxy(request: NextRequest, origin: string, path: strin
     const body = expectsBody ? await readBody(request, bodyLimit) : undefined;
     const response = await upstream(origin, path + request.nextUrl.search, token, method, body);
     const contentType = response.headers.get("Content-Type");
-    return new NextResponse(response.body, {
+    const pending =
+      path === "/execution/oauth/start" && method === "POST" && body && response.ok
+        ? await googlePendingCookie(response.clone(), body, token)
+        : undefined;
+    const proxyResponse = new NextResponse(response.body, {
       status: response.status,
       headers: contentType ? { ...headers, "Content-Type": contentType } : headers,
     });
+    if (pending) proxyResponse.cookies.set(pending.name, pending.value, googleCookieOptions);
+    return proxyResponse;
   } catch (error) {
     if (error instanceof BodyError) return problem(error.status, error.code);
     if (error instanceof SyntaxError) return problem(400, "invalid_json");
