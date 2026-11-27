@@ -11,6 +11,17 @@ export const connectionLabels = {
 } as const;
 
 export type ConnectionKind = keyof typeof connectionLabels;
+export const searchTypes = {
+  web: "网页",
+  image: "图片",
+  video: "视频",
+  news: "新闻标签",
+  discover: "Discover",
+  googleNews: "Google 新闻",
+} as const;
+
+export const searchDataStates = { final: "最终数据", all: "包含近期未最终数据" } as const;
+
 export type AnalyticsKind = "gsc" | "ga4" | "bing";
 export type CMSResource = "post" | "page";
 
@@ -127,6 +138,8 @@ export type ExecutionJobInput = {
   operation?: PublicationOperation;
   note?: string;
   url?: string;
+  search_type?: string;
+  data_state?: string;
   from?: string;
   to?: string;
   scheduled_at?: string;

@@ -27,6 +27,8 @@ import {
   isCMS,
   type OptimizationFeedback,
   type SitemapRecord,
+  searchDataStates,
+  searchTypes,
 } from "@/lib/seo/execution";
 import { seoRoutes } from "@/lib/seo/routes";
 
@@ -108,6 +110,7 @@ type DailySearchSnapshot = {
   date: string;
   connection_id: string;
   state: "pending" | "complete" | "truncated" | "failed";
+  freshness: "final" | "preliminary" | "unknown";
   rows: number;
   error_code?: string;
   observed_at: string;
@@ -115,6 +118,49 @@ type DailySearchSnapshot = {
 };
 
 const snapshotStates = { pending: "待处理", complete: "采集完成", truncated: "明细截断", failed: "采集失败" };
+const snapshotFreshness = { final: "最终", preliminary: "仍在更新", unknown: "未知" };
+
+type AnalyticsQuality = {
+  observed_at: string;
+  from?: string;
+  to?: string;
+  quality: {
+    time_zone?: string;
+    empty: boolean;
+    sampled: boolean;
+    thresholded: boolean;
+    data_loss_from_other_row: boolean;
+    provider_truncated?: boolean;
+    recent_window?: boolean;
+  };
+};
+
+function GA4ReportQuality({ report }: { report: AnalyticsQuality }) {
+  const quality = report.quality;
+  const statuses = [
+    quality.empty && "无返回数据",
+    quality.sampled && "存在抽样",
+    quality.thresholded && "适用数据阈值",
+    quality.data_loss_from_other_row && "存在归入「其他」的数据",
+    quality.provider_truncated && "服务商报告截断",
+    quality.recent_window && "含近期日期，数据可能继续更新",
+  ].filter((status): status is string => Boolean(status));
+  return (
+    <FilterBar>
+      <div className="grid gap-1 text-sm">
+        <h3 className="font-medium">最近报表的数据质量</h3>
+        <div className="flex flex-wrap gap-2">
+          {statuses.map((status) => (
+            <StateBadge key={status} label={status} tone="outline" />
+          ))}
+        </div>
+        <p className="text-muted-foreground text-xs">
+          GA4 · {quality.time_zone ?? "时区未知"} · {formatTime(report.observed_at)} UTC
+        </p>
+      </div>
+    </FilterBar>
+  );
+}
 
 export function AnalyticsPanel({
   kind,
@@ -126,14 +172,29 @@ export function AnalyticsPanel({
 }: PanelScope & { kind: AnalyticsKind }) {
   const available = connections.filter((item) => item.kind === kind);
   const { connection, setSelected } = useSelectedConnection(available);
-  const [range, setRange] = useState<{ from?: string; to?: string; page?: string; country?: string }>({});
+  const [range, setRange] = useState<{
+    from?: string;
+    to?: string;
+    page?: string;
+    country?: string;
+    search_type?: string;
+    data_state?: string;
+  }>({});
   const filters = { kind, connection_id: connection?.id };
   const metrics = useExecutionRecords<ExecutionMetric>("metrics", site.id, revision, { ...filters, ...range });
   const properties = useExecutionRecords<ExecutionProperty>("properties", site.id, revision, filters);
+  const quality = useExecutionRecords<AnalyticsQuality>(
+    "report-quality",
+    kind === "ga4" && connection ? site.id : "",
+    revision,
+    filters,
+  );
   const snapshots = useExecutionRecords<DailySearchSnapshot>("snapshots", kind === "gsc" ? site.id : "", revision, {
     connection_id: connection?.id,
     from: range.from,
     to: range.to,
+    search_type: range.search_type,
+    data_state: range.data_state,
   });
   const fields = metricFields[kind];
   const grain = {
@@ -150,7 +211,14 @@ export function AnalyticsPanel({
     const to = String(data.get("to") ?? "");
     const page = String(data.get("page") ?? "").trim();
     const country = String(data.get("country") ?? "").trim();
-    setRange({ from: from || undefined, to: to || undefined, page: page || undefined, country: country || undefined });
+    setRange({
+      from: from || undefined,
+      to: to || undefined,
+      page: page || undefined,
+      country: country || undefined,
+      search_type: kind === "gsc" ? String(data.get("search_type") ?? "") : undefined,
+      data_state: kind === "gsc" ? String(data.get("data_state") ?? "") : undefined,
+    });
   }
 
   return (
@@ -161,6 +229,7 @@ export function AnalyticsPanel({
             metrics.refresh();
             properties.refresh();
             if (kind === "gsc") snapshots.refresh();
+            if (kind === "ga4") quality.refresh();
           }}
           disabled={metrics.refreshing}
         >
@@ -206,12 +275,36 @@ export function AnalyticsPanel({
                 </Field>
               </div>
             )}
+            {kind === "gsc" && (
+              <>
+                <Field label="搜索类型" id="gsc-metric-type">
+                  <NativeSelect id="gsc-metric-type" name="search_type" defaultValue="web">
+                    {Object.entries(searchTypes).map(([value, label]) => (
+                      <NativeSelectOption key={value} value={value}>
+                        {label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
+                <Field label="数据范围" id="gsc-metric-state">
+                  <NativeSelect id="gsc-metric-state" name="data_state" defaultValue="final">
+                    {Object.entries(searchDataStates).map(([value, label]) => (
+                      <NativeSelectOption key={value} value={value}>
+                        {label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              </>
+            )}
             <Button type="submit" size="sm" variant="outline">
               筛选指标
             </Button>
           </form>
         </CardContent>
       </Card>
+      {kind === "ga4" && quality.records[0] && <GA4ReportQuality report={quality.records[0]} />}
+      {kind === "ga4" && <p className="text-muted-foreground text-xs">关键事件由 GA4 媒体资源的设置定义。</p>}
       {kind === "gsc" && (
         <>
           <p className="text-muted-foreground text-xs">
@@ -219,7 +312,7 @@ export function AnalyticsPanel({
           </p>
           <RecordsTable
             label="Search Console 每日快照"
-            columns={["日期", "明细状态", "点击", "展示", "明细行数", "来源与采集时间（UTC）"]}
+            columns={["日期", "明细状态", "数据状态", "点击", "展示", "明细行数", "来源与采集时间（UTC）"]}
             empty="暂无每日快照"
             list={snapshots}
           >
@@ -233,6 +326,7 @@ export function AnalyticsPanel({
                   />
                   {row.error_code && <p className="break-all text-muted-foreground text-xs">{row.error_code}</p>}
                 </TableCell>
+                <TableCell className="px-3">{row.freshness ? snapshotFreshness[row.freshness] : "未知"}</TableCell>
                 <TableCell className="px-3">{row.totals?.clicks ?? "未知"}</TableCell>
                 <TableCell className="px-3">{row.totals?.impressions ?? "未知"}</TableCell>
                 <TableCell className="px-3">{row.rows}</TableCell>

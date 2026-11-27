@@ -53,11 +53,12 @@ func TestPostgresGSCAtomicDailySnapshotsAndReclaimedCursor(t *testing.T) {
 	}
 	save := func(lease domain.Lease, work domain.ExecutionWork, expected domain.GSCCursor, rows []domain.ExecutionMetric) {
 		t.Helper()
+		expected.SearchType, expected.DataState = "web", "final"
 		cursor, err := s.NextGSCDay(ctx, org, lease.Job.ID)
 		if err != nil || cursor == nil || *cursor != expected {
 			t.Fatalf("unexpected cursor: %+v want %+v: %v", cursor, expected, err)
 		}
-		if err := s.SaveGSCPage(ctx, lease, work, *cursor, rows); err != nil {
+		if err := s.SaveGSCPage(ctx, lease, work, *cursor, domain.GSCReportPage{Metrics: rows}); err != nil {
 			t.Fatal(err)
 		}
 	}

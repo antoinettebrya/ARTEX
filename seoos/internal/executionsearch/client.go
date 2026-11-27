@@ -125,8 +125,8 @@ func (c *Client) Sync(ctx context.Context, config domain.ExecutionConnection, se
 		}
 		err = state.ga4(from, to)
 	case domain.ExecutionBing:
-		if !validSecret(secret.Secret) {
-			return state.output, failure("execution_bing_key_required")
+		if !hasBingCredential(secret) {
+			return state.output, failure("execution_bing_credential_required")
 		}
 		err = state.bing(secret.Secret, from, to)
 	default:
@@ -219,6 +219,15 @@ func (c *Client) request(ctx context.Context, config domain.ExecutionConnection,
 	}()
 	status = resp.StatusCode
 	if status < 200 || status >= 300 {
+		if status == http.StatusBadRequest && (endpoint == googleTokenURL || endpoint == bingOAuthURL+"token") {
+			var tokenError struct {
+				Code string `json:"error"`
+			}
+			if json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&tokenError) == nil && tokenError.Code == "invalid_grant" {
+				return status, failure("integration_invalid_grant")
+			}
+			return status, failure("integration_oauth_rejected")
+		}
 		return status, responseError(resp, target.Host)
 	}
 	if output == nil {
@@ -242,7 +251,7 @@ func responseError(resp *http.Response, host string) error {
 	delay := retryAfter(resp.Header.Get("Retry-After"))
 	switch status {
 	case http.StatusBadRequest:
-		if host == bingHost {
+		if host == bingHost || host == "www.bing.com" {
 			return bingAPIError(resp.Body, delay)
 		}
 	case http.StatusUnauthorized:
@@ -300,7 +309,7 @@ func retryAfter(value string) time.Duration {
 func officialHost(host string) bool {
 	switch host {
 	case "www.googleapis.com", "searchconsole.googleapis.com", "oauth2.googleapis.com",
-		"analyticsadmin.googleapis.com", "analyticsdata.googleapis.com", "ssl.bing.com", "api.indexnow.org":
+		"analyticsadmin.googleapis.com", "analyticsdata.googleapis.com", "ssl.bing.com", "www.bing.com", "api.indexnow.org":
 		return true
 	}
 	return false

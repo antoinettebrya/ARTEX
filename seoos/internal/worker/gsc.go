@@ -43,7 +43,7 @@ func (s executionScope) syncGSCDays(ctx context.Context) domain.JobOutcome {
 		if cursor == nil {
 			return s.finishGSCSync(ctx)
 		}
-		rows, err := client.GSCPage(ctx, s.connection, secret, cursor.Day, cursor.NextRow, !cursor.TotalsChecked)
+		page, err := client.GSCSeriesPage(ctx, s.connection, secret, *cursor)
 		if err != nil {
 			// Expiry of this worker slice does not consume a remote retry.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -52,7 +52,7 @@ func (s executionScope) syncGSCDays(ctx context.Context) domain.JobOutcome {
 			return s.failure(ctx, err)
 		}
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
-		err = s.repo.SaveGSCPage(saveCtx, s.lease, s.work, *cursor, rows)
+		err = s.repo.SaveGSCPage(saveCtx, s.lease, s.work, *cursor, page)
 		cancel()
 		if err != nil {
 			return s.failure(ctx, err)

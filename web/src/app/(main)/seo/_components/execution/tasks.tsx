@@ -20,6 +20,8 @@ import {
   type ExecutionPublication,
   executionJobLabels,
   type PublicationOperation,
+  searchDataStates,
+  searchTypes,
 } from "@/lib/seo/execution";
 
 import { useSeoQuery } from "../query";
@@ -113,6 +115,8 @@ export function ExecutionTaskEditor({
           publication_id: publication?.id,
           operation,
           url: url || undefined,
+          search_type: field(data, "search_type") || undefined,
+          data_state: field(data, "data_state") || undefined,
           from: field(data, "from") || undefined,
           to: field(data, "to") || undefined,
           note: requiresNote ? field(data, "note").trim() : undefined,
@@ -170,6 +174,28 @@ export function ExecutionTaskEditor({
           </Field>
           <Field id="execution-task-to" label="结束日期">
             <Input id="execution-task-to" type="date" name="to" defaultValue={selection.to} />
+          </Field>
+        </>
+      )}
+      {kind === "gsc_sync" && (
+        <>
+          <Field label="搜索类型" id="gsc-sync-type">
+            <NativeSelect id="gsc-sync-type" name="search_type" defaultValue="web">
+              {Object.entries(searchTypes).map(([value, label]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="数据范围" id="gsc-sync-state">
+            <NativeSelect id="gsc-sync-state" name="data_state" defaultValue="final">
+              {Object.entries(searchDataStates).map(([value, label]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </Field>
         </>
       )}

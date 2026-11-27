@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { KeyRound, Pencil, Plug, Plus, RefreshCw } from "lucide-react";
@@ -30,7 +31,14 @@ import { useExecutionRecords } from "./records";
 import type { TaskSelection } from "./tasks";
 
 const oauthSession = "artex.execution.oauth";
-type GoogleSession = { state: string; site_id: string; connection_id: string; project?: string; returnQuery?: string };
+type GoogleSession = {
+  state: string;
+  site_id: string;
+  connection_id: string;
+  project?: string;
+  returnQuery?: string;
+  returnToSettings?: boolean;
+};
 
 export function useGoogleReturn(owner: boolean) {
   const router = useRouter();
@@ -68,8 +76,15 @@ export function useGoogleReturn(owner: boolean) {
     }
     sessionStorage.removeItem(oauthSession);
 
-    const clean = new URL(seoRoutes.sites.connections.path, window.location.origin);
+    const clean = new URL(
+      pending.returnToSettings ? seoRoutes.system.settings.path : seoRoutes.sites.connections.path,
+      window.location.origin,
+    );
     if (pending.returnQuery) clean.search = pending.returnQuery;
+    if (pending.returnToSettings) {
+      clean.searchParams.set("tab", "bindings");
+      clean.searchParams.set("legacy", "1");
+    }
     for (const parameter of ["state", "code", "error", googleOAuthResultKey]) clean.searchParams.delete(parameter);
     clean.searchParams.set("site_id", pending.site_id);
     if (pending.project && isID(pending.project)) clean.searchParams.set("project_id", pending.project);
@@ -109,7 +124,12 @@ export function useGoogleReturn(owner: boolean) {
   return owner && (!!outcome || (!!state && !!(code || authError)));
 }
 
-async function startGoogle(connection: Connection, project: string | undefined, returnQuery: string | undefined) {
+async function startGoogle(
+  connection: Connection,
+  project: string | undefined,
+  returnQuery: string | undefined,
+  returnToSettings: boolean,
+) {
   const { authorization_url, state } = await seoRequest<{ authorization_url: string; state: string }>(
     "/execution/oauth/start",
     { method: "POST", body: { site_id: connection.site_id, connection_id: connection.id } },
@@ -129,6 +149,7 @@ async function startGoogle(connection: Connection, project: string | undefined, 
     state,
     project,
     returnQuery,
+    returnToSettings,
   };
   sessionStorage.setItem(oauthSession, JSON.stringify(pending));
   window.location.assign(url.href);
@@ -241,11 +262,13 @@ function ConnectionEditor({
           disabled={!!initial}
           onChange={(event) => setKind(event.target.value as ConnectionKind)}
         >
-          {Object.entries(connectionLabels).map(([value, label]) => (
-            <NativeSelectOption key={value} value={value}>
-              {label}
-            </NativeSelectOption>
-          ))}
+          {Object.entries(connectionLabels)
+            .filter(([value]) => value === initial?.kind || isCMS(value as ConnectionKind))
+            .map(([value, label]) => (
+              <NativeSelectOption key={value} value={value}>
+                {label}
+              </NativeSelectOption>
+            ))}
         </NativeSelect>
       </Field>
       <Field id="execution-connection-name" label="连接名称">
@@ -438,6 +461,7 @@ function connectionCapabilities(connection: Connection): string[] {
 }
 
 export function ConnectionsPanel({
+  legacy = false,
   site,
   owner,
   writable,
@@ -445,6 +469,7 @@ export function ConnectionsPanel({
   changed,
   revision,
 }: {
+  legacy?: boolean;
   site: Site;
   owner: boolean;
   writable: boolean;
@@ -455,7 +480,9 @@ export function ConnectionsPanel({
   const [editor, setEditor] = useState<"new" | Connection>();
   const [authorizing, setAuthorizing] = useState<string>();
   const { href, projectID, siteID } = useSeoLocation();
-  const records = useExecutionRecords<Connection>("connections", site.id, revision);
+  const records = useExecutionRecords<Connection>("connections", site.id, revision, {
+    kind: legacy ? "legacy_search" : "cms",
+  });
   const { refresh } = records;
 
   async function authorize(connection: Connection) {
@@ -465,6 +492,7 @@ export function ConnectionsPanel({
         connection,
         siteID === connection.site_id ? projectID : undefined,
         href(seoRoutes.sites.connections.path, { site_id: connection.site_id }).split("?", 2)[1],
+        legacy === true,
       );
     } catch (error) {
       toast.error(errorMessage(error));
@@ -475,12 +503,21 @@ export function ConnectionsPanel({
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">站点连接</h2>
+        <h2 className="font-semibold">{legacy ? "迁移前的搜索连接" : "站点连接"}</h2>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={refresh} disabled={records.refreshing}>
             <RefreshCw /> 刷新连接
           </Button>
-          {owner && (
+          {!legacy && (
+            <Button asChild type="button" variant="outline" size="sm">
+              <Link
+                href={`${href(seoRoutes.system.settings.path)}${href(seoRoutes.system.settings.path).includes("?") ? "&" : "?"}tab=bindings`}
+              >
+                搜索与分析集成
+              </Link>
+            </Button>
+          )}
+          {owner && !legacy && (
             <Button type="button" size="sm" onClick={() => setEditor("new")}>
               <Plus /> 新建连接
             </Button>
@@ -542,7 +579,7 @@ export function ConnectionsPanel({
                   <KeyRound /> 授权 Google
                 </Button>
               )}
-              {owner && (
+              {owner && (!legacy || connection.kind !== "indexnow") && (
                 <Button type="button" variant="ghost" size="sm" onClick={() => setEditor(connection)}>
                   <Pencil /> 编辑
                 </Button>

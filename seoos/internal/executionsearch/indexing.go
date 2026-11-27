@@ -5,13 +5,10 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 )
-
-var indexNowKey = regexp.MustCompile("^[A-Za-z0-9-]{8,128}$")
 
 func (c *Client) Inspect(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, target string) (domain.ExecutionIndexRecord, error) {
 	base, err := siteURL(config.BaseURL)
@@ -39,35 +36,75 @@ func (c *Client) Submit(ctx context.Context, config domain.ExecutionConnection, 
 // SubmitStatus returns the receipt status without implying search indexing.
 // IndexNow 202 means the URLs were received and key verification is pending.
 func (c *Client) SubmitStatus(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, urls []string) (int, error) {
-	if !config.Enabled || !config.AllowWrites {
-		return 0, domain.ErrExecutionAuthority
-	}
-	if len(urls) == 0 || len(urls) > 10000 {
-		return 0, failure("execution_submission_limit")
-	}
-	base, err := siteURL(config.BaseURL)
-	if err != nil {
+	if err := c.ValidateSubmission(config, secret, urls); err != nil {
 		return 0, err
 	}
-	for _, target := range urls {
-		if !targetWithin(base, target) {
-			return 0, domain.ErrExecutionAuthority
-		}
-	}
+	base, _ := siteURL(config.BaseURL)
 	switch config.Kind {
 	case domain.ExecutionIndexNow:
 		return c.submitIndexNow(ctx, config, secret, base, urls)
 	case domain.ExecutionBing:
-		return c.submitBing(ctx, config, secret, base, urls)
+		return c.submitBing(ctx, config, secret, urls)
 	default:
 		return 0, domain.ErrExecutionUnsupported
 	}
 }
 
-func (c *Client) submitIndexNow(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, base *url.URL, urls []string) (int, error) {
-	if !indexNowKey.MatchString(secret.Secret) {
-		return 0, failure("execution_invalid_indexnow_key")
+// ValidateSubmission bounds writes before recording their dispatch intent.
+func (c *Client) ValidateSubmission(config domain.ExecutionConnection, secret domain.ExecutionCredential, urls []string) error {
+	if !config.Enabled || !config.AllowWrites {
+		return domain.ErrExecutionAuthority
 	}
+	limit := 10000
+	if config.Kind == domain.ExecutionBing {
+		limit = 500
+	}
+	if len(urls) == 0 || len(urls) > limit {
+		return failure("execution_submission_limit")
+	}
+	base, err := siteURL(config.BaseURL)
+	if err != nil {
+		return err
+	}
+	for _, target := range urls {
+		if !targetWithin(base, target) {
+			return domain.ErrExecutionAuthority
+		}
+	}
+	switch config.Kind {
+	case domain.ExecutionBing:
+		property, err := siteURL(config.Property)
+		if err != nil || !targetWithin(base, config.Property) || !hasBingCredential(secret) {
+			return domain.ErrExecutionAuthority
+		}
+		for _, target := range urls {
+			if !targetWithin(property, target) {
+				return failure("execution_property_scope_mismatch")
+			}
+		}
+	case domain.ExecutionIndexNow:
+		if !domain.ValidIndexNowKey(secret.Secret, !config.Managed || config.LegacyKey) {
+			return failure("execution_invalid_indexnow_key")
+		}
+		if config.KeyLocation != "" {
+			key, err := siteURL(config.KeyLocation)
+			if err != nil || key.Scheme != base.Scheme || urlHost(key) != urlHost(base) || config.Managed && path.Base(key.Path) != secret.Secret+".txt" {
+				return failure("execution_invalid_indexnow_key_location")
+			}
+			key.Path, key.RawPath = path.Dir(key.Path), ""
+			for _, target := range urls {
+				if !targetWithin(key, target) {
+					return failure("execution_indexnow_key_scope_mismatch")
+				}
+			}
+		}
+	default:
+		return domain.ErrExecutionUnsupported
+	}
+	return nil
+}
+
+func (c *Client) submitIndexNow(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, base *url.URL, urls []string) (int, error) {
 	input := struct {
 		Host        string   `json:"host"`
 		Key         string   `json:"key"`
@@ -75,21 +112,7 @@ func (c *Client) submitIndexNow(ctx context.Context, config domain.ExecutionConn
 		URLs        []string `json:"urlList"`
 	}{
 		Host: strings.TrimSuffix(strings.ToLower(base.Hostname()), "."), Key: secret.Secret,
-		URLs: urls,
-	}
-	if config.KeyLocation != "" {
-		key, err := siteURL(config.KeyLocation)
-		if err != nil || key.Scheme != base.Scheme || urlHost(key) != urlHost(base) || strings.HasSuffix(key.Path, "/") || key.Path == "" {
-			return 0, failure("execution_invalid_indexnow_key_location")
-		}
-		scope := *key
-		scope.Path, scope.RawPath = path.Dir(key.Path), ""
-		for _, target := range urls {
-			if !targetWithin(&scope, target) {
-				return 0, failure("execution_indexnow_key_scope_mismatch")
-			}
-		}
-		input.KeyLocation = config.KeyLocation
+		KeyLocation: config.KeyLocation, URLs: urls,
 	}
 	status, err := c.requestJSON(ctx, config, http.MethodPost, indexNowURL, "", input, nil)
 	if err != nil {

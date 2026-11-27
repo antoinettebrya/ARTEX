@@ -65,6 +65,10 @@ func (s *Store) ExecutionConnectionAccess(ctx context.Context, org, site, id str
 	if !allowed || !c.Enabled {
 		return c, secret, domain.ErrExecutionAuthority
 	}
+	if resolved, managed, err := s.resolveIntegration(ctx, s.db, &c, true); managed {
+		c.Configured = err == nil
+		return c, resolved, err
+	}
 	if s.providerCipher == nil || len(encrypted) == 0 {
 		return c, secret, domain.ErrProviderNotConfigured
 	}
@@ -125,6 +129,14 @@ func (s *Store) SaveExecutionConnection(ctx context.Context, org, id string, in 
 		before, _, same, e := execConnection(ctx, tx, org, site.ID, id, "FOR NO KEY UPDATE OF c")
 		if e != nil {
 			return result, e
+		}
+		var managed bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM public.seo_site_integration_bindings
+			WHERE organization_id=$1 AND site_id=$2 AND id=$3)`, org, site.ID, id).Scan(&managed); err != nil {
+			return result, err
+		}
+		if managed {
+			return result, domain.ErrIntegrationDependency
 		}
 		if before.Version != in.Version {
 			return result, domain.ErrVersionConflict
@@ -262,6 +274,10 @@ func (s *Store) ConsumeOAuthState(ctx context.Context, c domain.ExecutionConnect
 }
 
 func (s *Store) ReserveExecutionRequest(ctx context.Context, org, site, connection string, version int64, lease *domain.Lease) (int64, error) {
+	return s.ReserveExecutionOperation(ctx, org, site, connection, version, lease, "")
+}
+
+func (s *Store) ReserveExecutionOperation(ctx context.Context, org, site, connection string, version int64, lease *domain.Lease, operation string) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -281,6 +297,7 @@ func (s *Store) ReserveExecutionRequest(ctx context.Context, org, site, connecti
 		return 0, domain.ErrExecutionAuthority
 	}
 	rpm, dayLimit := 60, 1000
+	var account string
 	if connection != "" {
 		c, _, active, err := execConnection(ctx, tx, org, site, connection, "FOR NO KEY UPDATE OF c")
 		if err != nil {
@@ -289,7 +306,23 @@ func (s *Store) ReserveExecutionRequest(ctx context.Context, org, site, connecti
 		if !active || !c.Enabled || c.Version != version {
 			return 0, domain.ErrExecutionAuthority
 		}
+		if err := s.fenceExecutionIntegration(ctx, tx, jobID, &c); err != nil {
+			return 0, err
+		}
+		account = c.IntegrationAccountID
+		if account != "" {
+			a, _, err := integrationAccount(ctx, tx, org, account, "")
+			if err != nil {
+				return 0, err
+			}
+			if err := checkIntegrationQuota(ctx, tx, org, a); err != nil {
+				return 0, err
+			}
+		}
 		rpm, dayLimit = c.RequestsPerMinute, c.RequestsPerDay
+		if operation == "gsc_url_inspection" {
+			rpm, dayLimit = min(rpm, 600), min(dayLimit, 2000)
+		}
 	} else if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "execution:"+org+":"+site); err != nil {
 		return 0, err
 	}
@@ -304,23 +337,18 @@ func (s *Store) ReserveExecutionRequest(ctx context.Context, org, site, connecti
 	err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE requested_at > $4),
 		count(*) FILTER (WHERE requested_at >= $5),min(requested_at) FILTER (WHERE requested_at > $4)
 		FROM public.seo_execution_request_calls WHERE organization_id=$1 AND site_id=$2
-		AND connection_id IS NOT DISTINCT FROM NULLIF($3,'')::uuid AND requested_at >= least($4::timestamptz,$5::timestamptz)`,
-		org, site, connection, minute, day).Scan(&minuteCount, &dayCount, &oldest)
+		AND connection_id IS NOT DISTINCT FROM NULLIF($3,'')::uuid AND requested_at >= least($4::timestamptz,$5::timestamptz)
+		AND (coalesce(operation,'')='gsc_url_inspection')=($6='gsc_url_inspection')`,
+		org, site, connection, minute, day, operation).Scan(&minuteCount, &dayCount, &oldest)
 	if err != nil {
 		return 0, err
 	}
-	var wait time.Duration
-	if dayCount >= dayLimit {
-		wait = day.Add(24 * time.Hour).Sub(now)
-	} else if minuteCount >= rpm {
-		wait = oldest.Time.Add(time.Minute).Sub(now)
-	}
-	if wait > 0 {
-		return 0, &domain.DataError{Code: "execution_budget", Retry: true, RetryAfter: wait, KnownUnbilled: true}
+	if err := requestBudget(minuteCount, dayCount, rpm, dayLimit, oldest, now, day); err != nil {
+		return 0, err
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO public.seo_execution_request_calls (organization_id,site_id,connection_id,job_id)
-		VALUES ($1,$2,NULLIF($3,'')::uuid,NULLIF($4,'')::uuid) RETURNING id`, org, site, connection, jobID).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO public.seo_execution_request_calls (organization_id,site_id,connection_id,job_id,integration_account_id,operation)
+		VALUES ($1,$2,NULLIF($3,'')::uuid,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,NULLIF($6,'')) RETURNING id`, org, site, connection, jobID, account, operation).Scan(&id)
 	if err != nil {
 		return 0, err
 	}

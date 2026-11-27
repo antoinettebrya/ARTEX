@@ -81,24 +81,42 @@ export async function runExecutionFlow({
   async function createConnection(
     kind: "generic" | "gsc" | "ga4" | "indexnow",
     name: string,
-    fields: Record<string, string>,
+    fields: Record<string, string | undefined>,
   ) {
+    if (kind !== "generic") {
+      const { connection } = await checked(
+        await request.post(`${base}/execution/connections`, {
+          headers,
+          data: {
+            site_id: siteID,
+            kind,
+            name,
+            enabled: true,
+            allow_writes: kind === "indexnow",
+            property: fields["资源地址或 sc-domain"] ?? fields["GA4 属性 ID"],
+            redirect_uri: fields["Google 授权回调地址"],
+            key_location: fields["IndexNow 密钥文件地址"],
+            credential: {
+              client_id: fields["Google 客户端 ID"],
+              client_secret: fields["Google 客户端密钥"],
+              secret: fields["API 密钥"],
+            },
+          },
+        }),
+        `seed previous ${kind} connection`,
+      );
+      expect(connection.credential).toBeUndefined();
+      return connection as { id: string };
+    }
     await page.getByRole("button", { name: "新建连接", exact: true }).click();
     const editor = page.getByRole("dialog", { name: "新建连接", exact: true });
     await editor.getByLabel("连接类型", { exact: true }).selectOption(kind);
     await editor.getByLabel("连接名称", { exact: true }).fill(name);
     for (const [label, value] of Object.entries(fields)) {
-      await editor.getByLabel(label, { exact: true }).fill(value);
+      if (value !== undefined) await editor.getByLabel(label, { exact: true }).fill(value);
     }
     await editor.getByRole("switch", { name: "启用连接", exact: true }).click();
-    if (kind === "generic" || kind === "indexnow") {
-      await editor
-        .getByRole("switch", {
-          name: kind === "generic" ? "授权此连接写入站点" : "授权此连接提交索引请求",
-          exact: true,
-        })
-        .click();
-    }
+    await editor.getByRole("switch", { name: "授权此连接写入站点", exact: true }).click();
     const connect = page.waitForResponse(
       (res) => new URL(res.url()).pathname === "/seo/api/execution/connections" && res.request().method() === "POST",
     );
@@ -325,6 +343,8 @@ export async function runExecutionFlow({
     "unrelated site established before returning from consent",
   );
   async function authorizeGoogle(kind: "gsc" | "ga4", name: string) {
+    const settings = `/seo/system/settings?tab=bindings&legacy=1&site_id=${siteID}`;
+    await page.goto(settings);
     const registered = kind === "gsc" ? configuredCallback : legacyCallback;
     const callback = new URL(new URL(registered).pathname, page.url());
     await page.route(
@@ -364,9 +384,14 @@ export async function runExecutionFlow({
       expect(response.ok(), "exchange legacy Google callback").toBe(true);
     }
     await expect(page).toHaveURL(
-      (url) => url.pathname === "/seo/sites/connections" && url.search === `?site_id=${siteID}`,
+      (url) =>
+        url.pathname === "/seo/system/settings" &&
+        url.searchParams.get("tab") === "bindings" &&
+        url.searchParams.get("legacy") === "1" &&
+        url.searchParams.get("site_id") === siteID &&
+        !url.searchParams.has("code"),
     );
-    await expect(page.getByLabel("执行站点", { exact: true })).toHaveValue(siteID);
+    await expect(page.getByLabel("集成站点", { exact: true })).toHaveValue(siteID);
     if (kind === "gsc") {
       const replay = await page.request.get(callback.href, { maxRedirects: 0 });
       expect(replay.status()).toBe(403);

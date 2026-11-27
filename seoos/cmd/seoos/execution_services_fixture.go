@@ -19,8 +19,9 @@ type executionLoopback struct {
 
 func (t executionLoopback) RoundTrip(req *http.Request) (*http.Response, error) {
 	switch req.URL.Hostname() {
-	case "phase3.example.com", "www.googleapis.com", "oauth2.googleapis.com", "searchconsole.googleapis.com",
-		"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com", "ssl.bing.com", "api.indexnow.org":
+	case "phase3.example.com", "center-one.example.test", "center-two.example.test",
+		"www.googleapis.com", "oauth2.googleapis.com", "searchconsole.googleapis.com",
+		"analyticsdata.googleapis.com", "analyticsadmin.googleapis.com", "ssl.bing.com", "www.bing.com", "api.indexnow.org":
 	default:
 		return nil, errors.New("execution fixture does not handle this host")
 	}

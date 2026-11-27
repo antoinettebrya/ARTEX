@@ -27,12 +27,26 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 	var query string
 	switch section {
 	case "connections":
-		query = `SELECT c.settings || jsonb_build_object('id',c.id,'organization_id',c.organization_id,
-			'version',c.version,'updated_at',c.updated_at,'configured',c.credential IS NOT NULL AND c.configured_site_url=s.base_url,
+		query = `SELECT (CASE WHEN c.kind='indexnow' THEN c.settings-'key_location' ELSE c.settings END) || jsonb_build_object('id',c.id,'organization_id',c.organization_id,
+			'version',c.version,'updated_at',c.updated_at,
+			'managed_integration',b.id IS NOT NULL,
+			'enabled',coalesce(b.enabled,(c.settings->>'enabled')::boolean,false),
+			'configured',c.configured_site_url=s.base_url AND CASE WHEN b.id IS NULL THEN c.credential IS NOT NULL
+				WHEN b.provider='indexnow' THEN k2.encrypted_key IS NOT NULL
+				ELSE a.authorization_status='CONNECTED' AND a.encrypted_credentials IS NOT NULL
+					AND (a.auth_mode='api_key' OR p.enabled) END,
 			'capabilities',COALESCE(k.data->'capabilities','{}'::jsonb),'site_info',k.data-'capabilities') FROM public.seo_cms_connections c
 			JOIN public.seo_sites s ON (s.organization_id,s.id)=(c.organization_id,c.site_id)
 			LEFT JOIN public.seo_cms_capabilities k ON (k.organization_id,k.site_id,k.connection_id)=(c.organization_id,c.site_id,c.id)
-			WHERE c.organization_id=$1 AND c.site_id=$2 ORDER BY c.updated_at DESC,c.id`
+			LEFT JOIN public.seo_site_integration_bindings b ON (b.organization_id,b.site_id,b.id)=(c.organization_id,c.site_id,c.id)
+			LEFT JOIN public.seo_indexnow_site_keys k2 ON (k2.organization_id,k2.site_id,k2.id)=(b.organization_id,b.site_id,b.id)
+			LEFT JOIN public.seo_integration_accounts a ON (a.organization_id,a.id)=(b.organization_id,b.integration_account_id)
+			LEFT JOIN public.seo_integration_applications p ON (p.organization_id,p.id)=(a.organization_id,a.application_id)
+			WHERE c.organization_id=$1 AND c.site_id=$2 AND b.deleted_at IS NULL
+			AND (NULLIF($5,'') IS NULL OR c.kind=$5 OR $5='cms' AND c.kind IN ('wordpress','generic')
+			OR $5='legacy_search' AND c.kind IN ('gsc','ga4','bing','indexnow') AND b.id IS NULL)
+			ORDER BY c.updated_at DESC,c.id`
+		args = append(args, f.Kind)
 	case "packages":
 		query = `SELECT p.data || jsonb_build_object('project_id',p.project_id)
 			FROM public.seo_content_publications p JOIN public.seo_content_projects x
@@ -47,6 +61,16 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 		query = `SELECT jsonb_build_object('job',to_jsonb(j) - 'lease_token' - 'lease_until' - 'priority','request',e.request-'media_base64')
 			FROM public.seo_execution_jobs e JOIN public.seo_jobs j ON (j.organization_id,j.id)=(e.organization_id,e.job_id)
 			WHERE e.organization_id=$1 AND e.site_id=$2 ORDER BY j.created_at DESC,j.id`
+	case "report-quality":
+		query = `SELECT jsonb_build_object('job_id',j.id,'observed_at',j.updated_at,'from',e.request->>'from','to',e.request->>'to',
+			'quality',j.result->'report_quality')
+			FROM public.seo_execution_jobs e
+			JOIN public.seo_jobs j ON (j.organization_id,j.site_id,j.id)=(e.organization_id,e.site_id,e.job_id)
+			JOIN public.seo_cms_connections c ON (c.organization_id,c.site_id,c.id,c.version)=(e.organization_id,e.site_id,e.connection_id,e.connection_version)
+			WHERE e.organization_id=$1 AND e.site_id=$2 AND (NULLIF($5,'') IS NULL OR e.connection_id=NULLIF($5,'')::uuid)
+			AND j.kind='ga4_sync' AND j.state='succeeded' AND j.result ? 'report_quality'
+			ORDER BY j.updated_at DESC,j.id`
+		args = append(args, f.ConnectionID)
 	case "pages":
 		query = `SELECT data || jsonb_build_object('connection_id',connection_id) FROM public.seo_cms_pages ` + filter + `ORDER BY observed_at DESC,remote_id`
 		args = append(args, f.ConnectionID)
@@ -55,6 +79,11 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 		args = append(args, f.ConnectionID)
 	case "properties", "metrics":
 		var sources []string
+		usesSeries := false
+		searchType, dataState, err := domain.GSCSeries(f.SearchType, f.DataState)
+		if err != nil {
+			return nil, err
+		}
 		for _, kind := range []string{domain.ExecutionGSC, domain.ExecutionGA4, domain.ExecutionBing} {
 			if f.Kind != "" && f.Kind != kind {
 				continue
@@ -66,11 +95,13 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 				table := `public.seo_` + kind + `_daily_metrics`
 				extra := ""
 				if kind == domain.ExecutionGSC {
+					usesSeries = true
 					// Rows are swapped only on a complete or explicitly truncated day.
 					// A newer failed attempt makes old detail unavailable.
-					extra = `AND coalesce((SELECT snap.state IN ('complete','truncated') AND snap.connection_version=c.version
+					extra = `AND m.search_type=$10 AND m.data_state=$11 AND coalesce((SELECT snap.state IN ('complete','truncated') AND snap.connection_version=c.version
 						FROM public.seo_gsc_daily_snapshots snap JOIN public.seo_cms_connections c ON c.id=snap.connection_id
 						WHERE (snap.organization_id,snap.site_id,snap.connection_id,snap.day)=(m.organization_id,m.site_id,m.connection_id,m.day)
+						AND snap.search_type=m.search_type AND snap.data_state=m.data_state
 						AND snap.state<>'pending' ORDER BY snap.started_at DESC,snap.job_id DESC LIMIT 1),true) `
 				}
 				sources = append(sources, `SELECT data || jsonb_build_object('connection_id',connection_id,'kind','`+kind+`','observed_at',observed_at) AS value,
@@ -88,10 +119,20 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 		args = append(args, f.ConnectionID)
 		if section == "metrics" {
 			args = append(args, f.From, f.To, f.Page, f.Country)
+			if usesSeries {
+				args = append(args, searchType, dataState)
+			}
 		}
 	case "snapshots":
+		searchType, dataState, err := domain.GSCSeries(f.SearchType, f.DataState)
+		if err != nil {
+			return nil, err
+		}
 		query = `SELECT jsonb_build_object('provider','gsc','date',snap.day,'site_id',snap.site_id,
-			'connection_id',snap.connection_id,'job_id',snap.job_id,'state',snap.state,
+			'connection_id',snap.connection_id,'job_id',snap.job_id,'state',snap.state,'search_type',snap.search_type,
+			'data_state',snap.data_state,'first_incomplete_date',snap.first_incomplete_date,'aggregation','byPage',
+			'freshness',CASE WHEN snap.day>=snap.first_incomplete_date THEN 'preliminary'
+				WHEN snap.totals_checked AND snap.totals IS NOT NULL THEN 'final' ELSE 'unknown' END,
 			'rows',snap.rows_collected,'error_code',snap.error_code,'observed_at',snap.observed_at,
 			'totals_state',CASE WHEN snap.totals IS NOT NULL THEN 'observed' ELSE 'unknown' END,
 			'totals',snap.totals) FROM (
@@ -100,9 +141,10 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 					(d.organization_id,d.site_id,d.connection_id,d.connection_version)
 				WHERE d.organization_id=$1 AND d.site_id=$2 AND ($5='' OR d.connection_id=NULLIF($5,'')::uuid)
 				AND ($6='' OR d.day>=NULLIF($6,'')::date) AND ($7='' OR d.day<=NULLIF($7,'')::date)
+				AND d.search_type=$8 AND d.data_state=$9
 				ORDER BY d.day,d.connection_id,d.started_at DESC,d.job_id DESC
 			) snap ORDER BY snap.day DESC,snap.connection_id`
-		args = append(args, f.ConnectionID, f.From, f.To)
+		args = append(args, f.ConnectionID, f.From, f.To, searchType, dataState)
 	case "index":
 		query = `SELECT data FROM public.seo_indexing_records ` + core + `AND ($5='' OR provider=$5) ORDER BY observed_at DESC,url_hash,provider`
 		args = append(args, f.Kind)

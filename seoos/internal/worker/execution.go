@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -27,16 +26,19 @@ type ExecutionServices struct {
 type executionRuntime interface {
 	ExecutionJob(context.Context, domain.Lease) (domain.ExecutionWork, error)
 	ExecutionConnectionAccess(context.Context, string, string, string) (domain.ExecutionConnection, domain.ExecutionCredential, error)
-	ReserveExecutionRequest(context.Context, string, string, string, int64, *domain.Lease) (int64, error)
+	ReserveExecutionOperation(context.Context, string, string, string, int64, *domain.Lease, string) (int64, error)
+	executionsearch.AccountLedger
+	RefreshIntegration(context.Context, string, string, int64, bool, func(context.Context, domain.IntegrationAccess) (domain.ExecutionCredential, []string, error)) (domain.IntegrationAccess, error)
+	RecordIndexNowVerification(context.Context, domain.Lease, domain.ExecutionConnection, string) error
 	SettleExecutionRequest(context.Context, string, string, int64, domain.ProviderReceipt) error
-	BeginExecutionSubmission(context.Context, domain.Lease, string, string) error
-	ExecutionSubmissionFailure(context.Context, domain.Lease, string, string, int, string, bool) error
+	BeginExecutionSubmissions(context.Context, domain.Lease, string, []string) error
+	ExecutionSubmissionsFailure(context.Context, domain.Lease, string, []string, int, string, bool) error
 	SaveExecutionTokens(context.Context, domain.ExecutionConnection, domain.ExecutionCredential) error
 	ExecutionSyncDates(context.Context, domain.ExecutionConnection, domain.ExecutionJobInput) (string, string, error)
 	StartGSCDays(context.Context, domain.Lease, domain.ExecutionConnection, string, string) error
 	NextGSCDay(context.Context, string, string) (*domain.GSCCursor, error)
 	GSCProgress(context.Context, string, string) (domain.GSCProgress, error)
-	SaveGSCPage(context.Context, domain.Lease, domain.ExecutionWork, domain.GSCCursor, []domain.ExecutionMetric) error
+	SaveGSCPage(context.Context, domain.Lease, domain.ExecutionWork, domain.GSCCursor, domain.GSCReportPage) error
 	SaveExecutionResult(context.Context, domain.Lease, domain.ExecutionWork, store.ExecutionResult) (json.RawMessage, error)
 	CrawlPolicy(context.Context, string, string) (*domain.CrawlPolicy, error)
 	ExecutionRelease(context.Context, domain.Lease, domain.ExecutionWork) (domain.ExecutionRelease, error)
@@ -56,6 +58,7 @@ type executionScope struct {
 	connection domain.ExecutionConnection
 	secret     domain.ExecutionCredential
 	client     *http.Client
+	fixture    *http.Client
 }
 
 func executionJob(ctx context.Context, repo repository, lease domain.Lease, site domain.Site, services *ExecutionServices) domain.JobOutcome {
@@ -76,12 +79,15 @@ func executionJob(ctx context.Context, repo repository, lease domain.Lease, site
 		}
 		return domain.JobOutcome{Result: work.Applied}
 	}
-	s := executionScope{repo: runtime, site: site, lease: lease, work: work}
+	s := executionScope{repo: runtime, site: site, lease: lease, work: work, fixture: services.Fixture}
 	timeout := 12 * time.Second
 	if id := work.Input.ConnectionID; id != "" {
 		s.connection, s.secret, err = runtime.ExecutionConnectionAccess(ctx, site.OrganizationID, site.ID, id)
 		if err != nil {
 			return s.failure(ctx, err)
+		}
+		if !s.connection.MatchesIntegration(work.IntegrationAccountID, work.IntegrationVersion) {
+			return s.failure(ctx, domain.ErrIntegrationRevoked)
 		}
 		if s.connection.Version != work.ConnectionVersion {
 			return s.failure(ctx, domain.ErrVersionConflict)
@@ -91,8 +97,8 @@ func executionJob(ctx context.Context, repo repository, lease domain.Lease, site
 	s.client = executionhttp.Client(services.Fixture, timeout, executionhttp.Ledger{
 		Provider: s.connection.Kind,
 		Secrets:  []string{s.secret.Secret, s.secret.ClientSecret, s.secret.RefreshToken, s.secret.AccessToken},
-		Reserve: func(ctx context.Context) (int64, error) {
-			return runtime.ReserveExecutionRequest(ctx, site.OrganizationID, site.ID, work.Input.ConnectionID, work.ConnectionVersion, &lease)
+		ReserveOperation: func(ctx context.Context, operation string) (int64, error) {
+			return runtime.ReserveExecutionOperation(ctx, site.OrganizationID, site.ID, work.Input.ConnectionID, work.ConnectionVersion, &lease, operation)
 		},
 		Settle: func(ctx context.Context, id int64, receipt domain.ProviderReceipt) error {
 			return runtime.SettleExecutionRequest(ctx, site.OrganizationID, site.ID, id, receipt)
@@ -128,7 +134,8 @@ func (s executionScope) execute(ctx context.Context) domain.JobOutcome {
 			return s.syncGSCDays(ctx)
 		}
 		if in.Kind == domain.ExecConnectionTest && c.Kind == domain.ExecutionIndexNow {
-			if err = s.verifyIndexNowKey(ctx); err == nil {
+			err = s.checkIndexNowKey(ctx)
+			if err == nil {
 				out.Info = &domain.CMSSiteInfo{Name: c.Name, URL: c.BaseURL}
 			}
 			break
@@ -226,6 +233,13 @@ func (s executionScope) cmsReadOrMedia(ctx context.Context, c domain.CMSConnecto
 
 func (s executionScope) searchCredential(ctx context.Context, client *executionsearch.Client) (domain.ExecutionCredential, error) {
 	secret := s.secret
+	if c := s.connection; c.IntegrationAccountID != "" {
+		access, err := s.repo.RefreshIntegration(ctx, s.site.OrganizationID, c.IntegrationAccountID, c.IntegrationVersion, false,
+			func(ctx context.Context, access domain.IntegrationAccess) (domain.ExecutionCredential, []string, error) {
+				return executionsearch.AccountClient(s.fixture, s.repo, s.site.OrganizationID, access, false).RefreshIntegrationToken(ctx, access)
+			})
+		return access.Credential, err
+	}
 	if c := s.connection; c.Kind == domain.ExecutionGSC || c.Kind == domain.ExecutionGA4 {
 		if secret.AccessToken == "" || secret.ExpiresAt == nil || time.Until(*secret.ExpiresAt) < time.Minute {
 			fresh, err := client.Refresh(ctx, c, secret)
@@ -258,7 +272,7 @@ func (s executionScope) search(ctx context.Context, onlySitemaps bool) (*domain.
 	if s.connection.Kind == domain.ExecutionGSC {
 		limit = min(32, s.connection.RequestsPerMinute, s.connection.RequestsPerDay)
 	}
-	if (s.connection.Kind == domain.ExecutionGSC || s.connection.Kind == domain.ExecutionGA4) &&
+	if !s.connection.Managed && (s.connection.Kind == domain.ExecutionGSC || s.connection.Kind == domain.ExecutionGA4) &&
 		(s.secret.ExpiresAt == nil || time.Until(*s.secret.ExpiresAt) < time.Minute || s.secret.AccessToken == "") {
 		limit--
 	}
@@ -310,49 +324,106 @@ func (s executionScope) submit(ctx context.Context) domain.JobOutcome {
 		return s.failure(ctx, domain.ErrExecutionAuthority)
 	}
 	if c.Kind == domain.ExecutionIndexNow {
-		if err := s.verifyIndexNowKey(ctx); err != nil {
+		if err := s.checkIndexNowKey(ctx); err != nil {
 			return s.failure(ctx, err)
 		}
 	}
-	u, err := url.Parse(in.URL)
-	if err != nil || !domain.BelongsToSite(s.site.BaseURL, u) {
-		return s.failure(ctx, domain.ErrExecutionAuthority)
+	targets := in.URLs
+	if len(targets) == 0 {
+		targets = []string{in.URL}
 	}
-	if err := s.repo.BeginExecutionSubmission(ctx, s.lease, c.Kind, in.URL); err != nil {
+	for _, target := range targets {
+		u, err := domain.EvidenceURL(target)
+		if err != nil || !domain.BelongsToSite(s.site.BaseURL, u) {
+			return s.failure(ctx, domain.ErrExecutionAuthority)
+		}
+	}
+	client := executionsearch.New(s.client)
+	secret, err := s.searchCredential(ctx, client)
+	if err != nil {
 		return s.failure(ctx, err)
 	}
-	status, err := executionsearch.New(s.client).SubmitStatus(ctx, c, s.secret, []string{in.URL})
+	if err = client.ValidateSubmission(c, secret, targets); err != nil {
+		return s.failure(ctx, err)
+	}
+	if err = s.repo.BeginExecutionSubmissions(ctx, s.lease, c.Kind, targets); err != nil {
+		return s.failure(ctx, err)
+	}
+	status, err := client.SubmitStatus(ctx, c, secret, targets)
 	if err != nil {
 		problem := executionFailure(err)
-		unknown := (status == 0 && problem.Code != "execution_budget") || status == http.StatusRequestTimeout || status >= 500 ||
-			status >= 200 && status < 300
+		var upstream *domain.DataError
+		knownUnsent := errors.As(err, &upstream) && upstream.KnownUnbilled
+		unknown := !knownUnsent && status == 0 || status == http.StatusRequestTimeout || status >= 500 || status >= 200 && status < 300
 		if unknown {
 			problem = domain.JobOutcome{Code: "execution_indexing_receipt_unknown"}
 		}
 		settlement, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if err := s.repo.ExecutionSubmissionFailure(settlement, s.lease, c.Kind, in.URL, status, problem.Code, unknown); err != nil {
+		if err := s.repo.ExecutionSubmissionsFailure(settlement, s.lease, c.Kind, targets, status, problem.Code, unknown); err != nil {
 			return domain.JobOutcome{Code: "execution_indexing_receipt_unknown"}
 		}
 		return problem
 	}
-	code := "accepted"
+	code, label := "accepted", "SUBMITTED"
 	if status == http.StatusAccepted {
-		code = "pending_key_validation"
+		code, label = "pending_key_validation", "ACCEPTED_PENDING_VERIFICATION"
 	}
-	out := store.ExecutionResult{Submission: map[string]any{"url": in.URL, "status": code, "http_status": status},
-		Indexes: []domain.ExecutionIndexRecord{{URL: in.URL, Status: domain.IndexSubmitted, Provider: c.Kind, Evidence: code, ObservedAt: time.Now().UTC()}}}
+	now := time.Now().UTC()
+	out := store.ExecutionResult{Submission: map[string]any{"url": targets[0], "urls": targets, "host": s.siteHost(),
+		"status": code, "integration_status": label, "http_status": status, "responded_at": now}}
+	if c.Kind == domain.ExecutionIndexNow && c.Managed {
+		out.Submission["key_id"] = c.ID
+	}
+	for _, url := range targets {
+		out.Indexes = append(out.Indexes, domain.ExecutionIndexRecord{URL: url, Status: domain.IndexSubmitted, Provider: c.Kind, Evidence: code, ObservedAt: now})
+	}
 	return s.save(ctx, out)
 }
 
+func (s executionScope) siteHost() string {
+	base, _ := domain.EvidenceURL(s.site.BaseURL)
+	if base == nil {
+		return ""
+	}
+	return base.Hostname()
+}
+
+func (s executionScope) checkIndexNowKey(ctx context.Context) error {
+	err := s.verifyIndexNowKey(ctx)
+	if !s.connection.Managed {
+		return err
+	}
+	code := ""
+	if err != nil {
+		code = executionFailure(err).Code
+	}
+	if recordErr := s.repo.RecordIndexNowVerification(ctx, s.lease, s.connection, code); recordErr != nil {
+		return recordErr
+	}
+	return err
+}
+
 func (s executionScope) verifyIndexNowKey(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.connection.KeyLocation, nil)
+	location := s.connection.KeyLocation
+	client := s.client
+	if s.connection.Managed {
+		location = s.connection.IndexNowVerificationURL
+		isolated := *client
+		isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &isolated
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 	if err != nil {
 		return &domain.DataError{Code: "indexnow_ownership_unverified"}
 	}
-	response, err := s.client.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
-		return err
+		var providerError *domain.DataError
+		if errors.As(err, &providerError) || ctx.Err() != nil {
+			return err
+		}
+		return &domain.DataError{Code: "indexnow_ownership_unavailable", Retry: true}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
@@ -362,7 +433,11 @@ func (s executionScope) verifyIndexNowKey(ctx context.Context) error {
 	if readErr != nil {
 		return &domain.DataError{Code: "indexnow_ownership_unavailable", Retry: true}
 	}
-	if response.StatusCode != http.StatusOK || len(body) > 1024 || strings.TrimSpace(string(body)) != s.secret.Secret {
+	actual := string(body)
+	if !s.connection.Managed || s.connection.LegacyKey {
+		actual = strings.TrimSpace(actual)
+	}
+	if response.StatusCode != http.StatusOK || len(body) > 1024 || actual != s.secret.Secret {
 		return &domain.DataError{Code: "indexnow_ownership_unverified"}
 	}
 	return nil
@@ -407,6 +482,8 @@ func executionFailure(err error) domain.JobOutcome {
 			out.RetryAfter = time.Now().UTC().Add(min(data.RetryAfter, 24*time.Hour))
 		}
 		return out
+	case errors.Is(err, domain.ErrIntegrationRevoked):
+		return domain.JobOutcome{Code: "integration_authorization_changed"}
 	case errors.Is(err, domain.ErrExecutionAuthority), errors.Is(err, domain.ErrCrawlUnauthorized):
 		return domain.JobOutcome{Code: "execution_unauthorized"}
 	case errors.Is(err, domain.ErrExecutionUnsupported):

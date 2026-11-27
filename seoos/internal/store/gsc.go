@@ -30,8 +30,9 @@ func (s *Store) StartGSCDays(ctx context.Context, lease domain.Lease, c domain.E
 		return domain.ErrExecutionAuthority
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO public.seo_gsc_daily_snapshots
-		(organization_id,site_id,connection_id,connection_version,job_id,day,started_at)
-		SELECT e.organization_id,e.site_id,e.connection_id,e.connection_version,e.job_id,day::date,$5
+		(organization_id,site_id,connection_id,connection_version,job_id,day,started_at,search_type,data_state)
+		SELECT e.organization_id,e.site_id,e.connection_id,e.connection_version,e.job_id,day::date,$5,
+			coalesce(nullif(e.request->>'search_type',''),'web'),coalesce(nullif(e.request->>'data_state',''),'final')
 		FROM public.seo_execution_jobs e
 		CROSS JOIN generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day
 		WHERE e.organization_id=$1 AND e.job_id=$2
@@ -43,9 +44,9 @@ func (s *Store) StartGSCDays(ctx context.Context, lease domain.Lease, c domain.E
 
 func (s *Store) NextGSCDay(ctx context.Context, org, job string) (*domain.GSCCursor, error) {
 	var out domain.GSCCursor
-	err := s.db.QueryRowContext(ctx, `SELECT day::text,totals_checked,next_row FROM public.seo_gsc_daily_snapshots
+	err := s.db.QueryRowContext(ctx, `SELECT day::text,totals_checked,next_row,search_type,data_state FROM public.seo_gsc_daily_snapshots
 		WHERE organization_id=$1 AND job_id=$2 AND state='pending' ORDER BY day LIMIT 1`, org, job).
-		Scan(&out.Day, &out.TotalsChecked, &out.NextRow)
+		Scan(&out.Day, &out.TotalsChecked, &out.NextRow, &out.SearchType, &out.DataState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -63,7 +64,7 @@ func (s *Store) GSCProgress(ctx context.Context, org, job string) (domain.GSCPro
 	return out, err
 }
 
-func (s *Store) SaveGSCPage(ctx context.Context, lease domain.Lease, work domain.ExecutionWork, cursor domain.GSCCursor, metrics []domain.ExecutionMetric) error {
+func (s *Store) SaveGSCPage(ctx context.Context, lease domain.Lease, work domain.ExecutionWork, cursor domain.GSCCursor, page domain.GSCReportPage) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -81,18 +82,23 @@ func (s *Store) SaveGSCPage(ctx context.Context, lease domain.Lease, work domain
 	if !active || !c.Enabled || c.Version != work.ConnectionVersion || c.Kind != domain.ExecutionGSC {
 		return domain.ErrExecutionAuthority
 	}
+	if err = s.fenceExecutionIntegration(ctx, tx, job.ID, &c); err != nil {
+		return err
+	}
 	var offset int
 	var checked bool
-	var state string
-	err = tx.QueryRowContext(ctx, `SELECT next_row,totals_checked,state FROM public.seo_gsc_daily_snapshots
+	var state, searchType, dataState string
+	err = tx.QueryRowContext(ctx, `SELECT next_row,totals_checked,state,search_type,data_state FROM public.seo_gsc_daily_snapshots
 		WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND job_id=$4 AND day=$5 FOR UPDATE`,
-		job.OrganizationID, job.SiteID, c.ID, job.ID, cursor.Day).Scan(&offset, &checked, &state)
+		job.OrganizationID, job.SiteID, c.ID, job.ID, cursor.Day).Scan(&offset, &checked, &state, &searchType, &dataState)
 	if err != nil {
 		return classifyError(err)
 	}
-	if state != "pending" || offset != cursor.NextRow || checked != cursor.TotalsChecked {
+	if state != "pending" || offset != cursor.NextRow || checked != cursor.TotalsChecked ||
+		searchType != cursor.SearchType || dataState != cursor.DataState {
 		return domain.ErrExecutionState
 	}
+	metrics := page.Metrics
 	if !checked {
 		if len(metrics) > 1 || len(metrics) == 1 && metrics[0].Date != cursor.Day {
 			return domain.ErrExecutionState
@@ -106,8 +112,8 @@ func (s *Store) SaveGSCPage(ctx context.Context, lease domain.Lease, work domain
 			totals = string(raw)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE public.seo_gsc_daily_snapshots
-			SET totals_checked=true,totals=$4::jsonb,observed_at=clock_timestamp()
-			WHERE organization_id=$1 AND job_id=$2 AND day=$3`, job.OrganizationID, job.ID, cursor.Day, totals); err != nil {
+			SET totals_checked=true,totals=$4::jsonb,observed_at=clock_timestamp(),first_incomplete_date=NULLIF($5,'')::date
+			WHERE organization_id=$1 AND job_id=$2 AND day=$3`, job.OrganizationID, job.ID, cursor.Day, totals, page.FirstIncompleteDate); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -128,13 +134,14 @@ func (s *Store) SaveGSCPage(ctx context.Context, lease domain.Lease, work domain
 		state = "complete"
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE public.seo_gsc_daily_snapshots
-		SET next_row=$4,rows_collected=rows_collected+$5,state=$6,observed_at=clock_timestamp()
+		SET next_row=$4,rows_collected=rows_collected+$5,state=$6,observed_at=clock_timestamp(),
+			first_incomplete_date=least(first_incomplete_date,NULLIF($7,'')::date)
 		WHERE organization_id=$1 AND job_id=$2 AND day=$3`,
-		job.OrganizationID, job.ID, cursor.Day, next, added, state); err != nil {
+		job.OrganizationID, job.ID, cursor.Day, next, added, state, page.FirstIncompleteDate); err != nil {
 		return err
 	}
 	if state != "pending" {
-		if err := publishGSCDay(ctx, tx, job, c, cursor.Day); err != nil {
+		if err := publishGSCDay(ctx, tx, job, c, cursor); err != nil {
 			return err
 		}
 	}
@@ -174,27 +181,32 @@ func stageGSCMetrics(ctx context.Context, tx *sql.Tx, job domain.Job, baseURL, d
 	return res.RowsAffected()
 }
 
-func publishGSCDay(ctx context.Context, tx *sql.Tx, job domain.Job, c domain.ExecutionConnection, day string) error {
+func publishGSCDay(ctx context.Context, tx *sql.Tx, job domain.Job, c domain.ExecutionConnection, cursor domain.GSCCursor) error {
+	day := cursor.Day
+	searchType, dataState, err := domain.GSCSeries(cursor.SearchType, cursor.DataState)
+	if err != nil {
+		return err
+	}
 	var newest string
-	err := tx.QueryRowContext(ctx, `SELECT job_id::text FROM public.seo_gsc_daily_snapshots
+	err = tx.QueryRowContext(ctx, `SELECT job_id::text FROM public.seo_gsc_daily_snapshots
 		WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND connection_version=$4 AND day=$5
-		AND state IN ('complete','truncated') ORDER BY started_at DESC,job_id DESC LIMIT 1`,
-		job.OrganizationID, job.SiteID, c.ID, c.Version, day).Scan(&newest)
+		AND search_type=$6 AND data_state=$7 AND state IN ('complete','truncated') ORDER BY started_at DESC,job_id DESC LIMIT 1`,
+		job.OrganizationID, job.SiteID, c.ID, c.Version, day, searchType, dataState).Scan(&newest)
 	if err != nil {
 		return err
 	}
 	if newest == job.ID {
 		// Empty finished snapshots also replace all prior rows for the day.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM public.seo_gsc_daily_metrics
-			WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND day=$4`,
-			job.OrganizationID, job.SiteID, c.ID, day); err != nil {
+			WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND day=$4 AND search_type=$5 AND data_state=$6`,
+			job.OrganizationID, job.SiteID, c.ID, day, searchType, dataState); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO public.seo_gsc_daily_metrics
-			(organization_id,site_id,connection_id,day,dimension_hash,data)
-			SELECT r.organization_id,$4,$5,r.day,r.dimension_hash,r.data
+			(organization_id,site_id,connection_id,day,dimension_hash,data,search_type,data_state)
+			SELECT r.organization_id,$4,$5,r.day,r.dimension_hash,r.data,$6,$7
 			FROM public.seo_gsc_snapshot_rows r WHERE r.organization_id=$1 AND r.job_id=$2 AND r.day=$3`,
-			job.OrganizationID, job.ID, day, job.SiteID, c.ID); err != nil {
+			job.OrganizationID, job.ID, day, job.SiteID, c.ID, searchType, dataState); err != nil {
 			return err
 		}
 	}

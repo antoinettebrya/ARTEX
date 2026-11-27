@@ -118,18 +118,18 @@ func (h *handler) serveExecution(w http.ResponseWriter, r *http.Request, actor d
 		return true
 	}
 	switch path {
-	case "connections", "packages", "publications", "jobs", "pages", "media", "properties", "metrics", "snapshots", "index", "sitemaps", "extractions", "usage", "feedback", "submissions":
+	case "connections", "packages", "publications", "jobs", "pages", "media", "properties", "metrics", "report-quality", "snapshots", "index", "sitemaps", "extractions", "usage", "feedback", "submissions":
 		if path == "usage" && actor.Role != domain.RoleOwner {
 			forbidden(w)
 			return true
 		}
-		limit, offset, ok := contentPage(w, r, "connection_id", "kind", "from", "to", "page", "country")
+		limit, offset, ok := contentPage(w, r, "connection_id", "kind", "from", "to", "page", "country", "search_type", "data_state")
 		if !ok {
 			return true
 		}
 		q := r.URL.Query()
 		filter := domain.ExecutionFilter{SiteID: q.Get("site_id"), ConnectionID: q.Get("connection_id"), Kind: q.Get("kind"), From: q.Get("from"),
-			To: q.Get("to"), Page: q.Get("page"), Country: q.Get("country"), Limit: limit, Offset: offset}
+			To: q.Get("to"), Page: q.Get("page"), Country: q.Get("country"), SearchType: q.Get("search_type"), DataState: q.Get("data_state"), Limit: limit, Offset: offset}
 		if _, _, err := domain.ExecutionDateRange(filter.From, filter.To); err != nil {
 			executionResult(w, 200, nil, err)
 			return true
@@ -166,7 +166,7 @@ func (h *handler) executionOAuth(w http.ResponseWriter, r *http.Request, repo ex
 		executionResult(w, 200, nil, err)
 		return
 	}
-	if c.Kind != domain.ExecutionGSC && c.Kind != domain.ExecutionGA4 || c.RedirectURI == "" {
+	if c.Managed || c.Kind != domain.ExecutionGSC && c.Kind != domain.ExecutionGA4 || c.RedirectURI == "" {
 		executionResult(w, 200, nil, domain.ErrExecutionUnsupported)
 		return
 	}
@@ -208,6 +208,12 @@ func (h *handler) executionOAuth(w http.ResponseWriter, r *http.Request, repo ex
 func executionResult(w http.ResponseWriter, status int, value any, err error) {
 	var data *domain.DataError
 	switch {
+	case errors.Is(err, domain.ErrIntegrationDependency):
+		writeError(w, 409, "integration_dependency", "Detach dependent integrations first.")
+	case errors.Is(err, domain.ErrIntegrationRequired):
+		writeError(w, 409, "integration_required", "Select an active integration explicitly.")
+	case errors.Is(err, domain.ErrIntegrationRevoked):
+		writeError(w, 409, "integration_authorization_changed", "The authorization changed or was revoked.")
 	case errors.Is(err, domain.ErrExecutionUnsupported):
 		writeError(w, 409, "execution_unsupported", "The configured connection does not support this operation.")
 	case errors.Is(err, domain.ErrExecutionState):

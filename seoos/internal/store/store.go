@@ -114,7 +114,9 @@ func classifyError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		if pgErr.Code == "23505" && pgErr.ConstraintName == "seo_sites_organization_url_unique" {
+		if pgErr.Code == "23505" && (pgErr.ConstraintName == "seo_sites_organization_url_unique" ||
+			pgErr.ConstraintName == "seo_integration_resource_once" || pgErr.ConstraintName == "seo_integration_site_provider_once" ||
+			pgErr.ConstraintName == "seo_indexnow_one_active_host") {
 			return domain.ErrConflict
 		}
 		if pgErr.Code == "23503" && pgErr.ConstraintName == "seo_sites_organization_fk" {

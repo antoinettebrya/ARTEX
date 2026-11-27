@@ -27,7 +27,12 @@ func (s *Store) Dashboard(ctx context.Context, org string, scope domain.SiteScop
 		), current_connections AS (
 			SELECT DISTINCT ON (c.site_id,c.kind) c.site_id,c.id,c.kind,c.version
 			FROM public.seo_cms_connections c JOIN sites s ON s.id=c.site_id
-			WHERE c.organization_id=$1 AND c.configured_site_url=s.base_url AND c.credential IS NOT NULL
+			LEFT JOIN public.seo_site_integration_bindings b ON (b.organization_id,b.site_id,b.id)=(c.organization_id,c.site_id,c.id)
+			LEFT JOIN public.seo_integration_accounts a ON (a.organization_id,a.id)=(b.organization_id,b.integration_account_id)
+			LEFT JOIN public.seo_integration_applications p ON (p.organization_id,p.id)=(a.organization_id,a.application_id)
+			WHERE c.organization_id=$1 AND c.configured_site_url=s.base_url
+			AND (b.id IS NULL AND c.credential IS NOT NULL OR b.enabled AND b.deleted_at IS NULL
+				AND a.authorization_status='CONNECTED' AND p.enabled)
 			AND c.kind IN ('gsc','ga4') AND c.settings->>'enabled'='true' AND coalesce(c.settings->>'property','')<>''
 			ORDER BY c.site_id,c.kind,c.updated_at DESC,c.id
 		), daily_jobs AS (
@@ -59,6 +64,7 @@ func (s *Store) Dashboard(ctx context.Context, org string, scope domain.SiteScop
 			FROM public.seo_gsc_daily_snapshots d CROSS JOIN bounds
 			JOIN current_connections c ON c.kind='gsc'
 			WHERE d.organization_id=$1 AND (d.site_id,d.connection_id,d.connection_version)=(c.site_id,c.id,c.version)
+			AND d.search_type='web' AND d.data_state='final'
 			AND d.day BETWEEN first_day AND last_day ORDER BY d.site_id,d.day,d.started_at DESC,d.job_id DESC
 		), gsc AS (
 			SELECT count(*) FILTER (WHERE totals IS NOT NULL AND state IN ('complete','truncated')) covered_days,

@@ -3,6 +3,7 @@ package executionsearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -151,8 +152,8 @@ func (c *Client) inspectBing(ctx context.Context, config domain.ExecutionConnect
 	if err != nil || !targetWithin(base, config.Property) || !targetWithin(property, target) {
 		return domain.ExecutionIndexRecord{}, failure("execution_property_scope_mismatch")
 	}
-	if !validSecret(secret.Secret) {
-		return domain.ExecutionIndexRecord{}, failure("execution_bing_key_required")
+	if !hasBingCredential(secret) {
+		return domain.ExecutionIndexRecord{}, failure("execution_bing_credential_required")
 	}
 	params := url.Values{
 		"siteUrl": {config.Property},
@@ -161,7 +162,7 @@ func (c *Client) inspectBing(ctx context.Context, config domain.ExecutionConnect
 	var wire struct {
 		Data json.RawMessage `json:"d"`
 	}
-	_, err = c.requestJSON(ctx, config, http.MethodGet, bingEndpoint(secret.Secret, "GetUrlInfo", params), "", nil, &wire)
+	_, err = c.requestJSON(ctx, config, http.MethodGet, bingEndpoint(secret.Secret, "GetUrlInfo", params), secret.AccessToken, nil, &wire)
 	if err != nil {
 		return domain.ExecutionIndexRecord{}, err
 	}
@@ -187,30 +188,21 @@ func (c *Client) inspectBing(ctx context.Context, config domain.ExecutionConnect
 	return out, nil
 }
 
-func (c *Client) submitBing(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, base *url.URL, urls []string) (int, error) {
-	if len(urls) > 500 {
-		return 0, failure("execution_submission_limit")
-	}
-	property, err := siteURL(config.Property)
-	if err != nil || !targetWithin(base, config.Property) {
-		return 0, failure("execution_property_scope_mismatch")
-	}
-	for _, target := range urls {
-		if !targetWithin(property, target) {
-			return 0, failure("execution_property_scope_mismatch")
+func (c *Client) submitBing(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, urls []string) (int, error) {
+	if err := c.checkBingSubmissionQuota(ctx, config, secret, len(urls)); err != nil {
+		var problem *domain.DataError
+		if errors.As(err, &problem) {
+			copy := *problem
+			copy.KnownUnbilled = true
+			err = &copy
 		}
-	}
-	if !validSecret(secret.Secret) {
-		return 0, failure("execution_bing_key_required")
-	}
-	if err := c.checkBingSubmissionQuota(ctx, config, secret.Secret, len(urls)); err != nil {
 		return 0, err
 	}
 
 	var reply struct {
 		Data json.RawMessage `json:"d"`
 	}
-	status, err := c.requestJSON(ctx, config, http.MethodPost, bingEndpoint(secret.Secret, "SubmitUrlBatch", nil), "", map[string]any{
+	status, err := c.requestJSON(ctx, config, http.MethodPost, bingEndpoint(secret.Secret, "SubmitUrlBatch", nil), secret.AccessToken, map[string]any{
 		"siteUrl": config.Property, "urlList": urls,
 	}, &reply)
 	if err != nil {
@@ -222,12 +214,12 @@ func (c *Client) submitBing(ctx context.Context, config domain.ExecutionConnecti
 	return status, nil
 }
 
-func (c *Client) checkBingSubmissionQuota(ctx context.Context, config domain.ExecutionConnection, key string, size int) error {
-	endpoint := bingEndpoint(key, "GetUrlSubmissionQuota", url.Values{"siteUrl": {config.Property}})
+func (c *Client) checkBingSubmissionQuota(ctx context.Context, config domain.ExecutionConnection, secret domain.ExecutionCredential, size int) error {
+	endpoint := bingEndpoint(secret.Secret, "GetUrlSubmissionQuota", url.Values{"siteUrl": {config.Property}})
 	var data struct {
 		Data json.RawMessage `json:"d"`
 	}
-	if _, err := c.requestJSON(ctx, config, http.MethodGet, endpoint, "", nil, &data); err != nil {
+	if _, err := c.requestJSON(ctx, config, http.MethodGet, endpoint, secret.AccessToken, nil, &data); err != nil {
 		return err
 	}
 	var quota struct {
@@ -268,12 +260,21 @@ func bingAPIError(body io.Reader, delay time.Duration) error {
 	return failure("execution_upstream_rejected")
 }
 
+func hasBingCredential(secret domain.ExecutionCredential) bool {
+	return validSecret(secret.Secret) || validSecret(secret.AccessToken)
+}
+
 func bingEndpoint(key, method string, params url.Values) string {
 	if params == nil {
 		params = make(url.Values)
 	}
-	params.Set("apikey", key)
-	return bingAPIURL + "/" + method + "?" + params.Encode()
+	endpoint := bingAPIURL
+	if key == "" {
+		endpoint = "https://www.bing.com/webmaster/api.svc/json"
+	} else {
+		params.Set("apikey", key)
+	}
+	return endpoint + "/" + method + "?" + params.Encode()
 }
 
 func decodeBing(data json.RawMessage, out any) error {

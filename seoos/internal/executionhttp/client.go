@@ -18,10 +18,11 @@ import (
 )
 
 type Ledger struct {
-	Provider string
-	Secrets  []string
-	Reserve  func(context.Context) (int64, error)
-	Settle   func(context.Context, int64, domain.ProviderReceipt) error
+	Provider         string
+	Secrets          []string
+	Reserve          func(context.Context) (int64, error)
+	ReserveOperation func(context.Context, string) (int64, error)
+	Settle           func(context.Context, int64, domain.ProviderReceipt) error
 }
 
 type countedTransport struct {
@@ -30,17 +31,24 @@ type countedTransport struct {
 }
 
 func (c countedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	id, err := c.ledger.Reserve(req.Context())
-	if err != nil {
-		return nil, err
-	}
-	start := time.Now()
 	provider := c.ledger.Provider
 	if provider == "" {
 		provider = "site"
 	}
+	op := operation(req, provider)
+	var id int64
+	var err error
+	if c.ledger.ReserveOperation != nil {
+		id, err = c.ledger.ReserveOperation(req.Context(), op)
+	} else {
+		id, err = c.ledger.Reserve(req.Context())
+	}
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
 	zero := int64(0)
-	receipt := domain.ProviderReceipt{Provider: provider, Operation: operation(req, provider),
+	receipt := domain.ProviderReceipt{Provider: provider, Operation: op,
 		CostSource: "no_metered_fee", CostMicros: &zero}
 	settle := func() {
 		receipt.DurationMS = time.Since(start).Milliseconds()
@@ -123,9 +131,19 @@ func (b *measuredBody) Close() error {
 func operation(req *http.Request, provider string) string {
 	switch req.URL.Hostname() {
 	case "oauth2.googleapis.com":
+		if req.URL.Path == "/revoke" {
+			return "oauth_revoke"
+		}
 		return "oauth_token"
 	case "analyticsadmin.googleapis.com":
-		return "ga4_account_summaries"
+		switch path.Base(req.URL.Path) {
+		case "accountSummaries":
+			return "ga4_account_summaries"
+		case "dataStreams":
+			return "ga4_data_streams"
+		default:
+			return "ga4_property"
+		}
 	case "analyticsdata.googleapis.com":
 		return "ga4_run_report"
 	case "searchconsole.googleapis.com":
@@ -139,9 +157,12 @@ func operation(req *http.Request, provider string) string {
 		default:
 			return "gsc_sites"
 		}
-	case "ssl.bing.com":
+	case "ssl.bing.com", "www.bing.com":
+		if req.URL.Path == "/webmasters/oauth/token" {
+			return "oauth_token"
+		}
 		switch method := path.Base(req.URL.Path); method {
-		case "GetUserSites", "GetFeeds", "GetRankAndTrafficStats", "GetQueryStats", "GetPageStats", "GetUrlInfo", "SubmitUrlBatch":
+		case "GetUserSites", "GetFeeds", "GetRankAndTrafficStats", "GetQueryStats", "GetPageStats", "GetUrlInfo", "GetUrlSubmissionQuota", "SubmitUrlBatch":
 			return method
 		}
 		return "bing_webmaster"

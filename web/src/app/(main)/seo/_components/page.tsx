@@ -21,6 +21,7 @@ import { Members } from "./members";
 import { Providers } from "./providers";
 import { Research } from "./research";
 import { useSeoSession } from "./session";
+import { SearchIntegrationSettings } from "./settings";
 import { PageFrame, PageSkeleton, StateBadge } from "./shared";
 import { SiteGroups, SiteSettings, Sites } from "./sites";
 
@@ -99,6 +100,7 @@ export function SeoPage({ route }: { route: SeoRoute }) {
     if (route.view === "logs") return <Audit execution />;
     return <ExecutionCenter view={route.view} />;
   }
+  if (route.view === "settings") return <SearchIntegrationSettings />;
   if (route.view === "jobs") return <Jobs />;
   if (route.view === "members") return <Members />;
   if (route.view === "audit") return <Audit />;

@@ -170,8 +170,12 @@ func (in ExecutionJobInput) Validate() error {
 		return invalid("job", "choose a supported operation, site, key and priority")
 	}
 	contentOnly := in.Kind == ExecPDF || in.Kind == ExecBrowser || in.Kind == ExecSitemap
-	if !contentOnly && !ValidID(in.ConnectionID) || contentOnly && in.ConnectionID != "" && !ValidID(in.ConnectionID) {
+	implicit := in.Kind == ExecGSCSync || in.Kind == ExecGA4Sync || in.Kind == ExecBingSync || in.Kind == ExecInspection || in.Kind == ExecIndexNow
+	if in.ConnectionID != "" && !ValidID(in.ConnectionID) || in.ConnectionID == "" && !contentOnly && !implicit {
 		return invalid("connection_id", "select the integration required by this task")
+	}
+	if in.Provider != "" && in.Kind != ExecInspection && in.Kind != ExecIndexNow {
+		return invalid("provider", "provider selection is only used for inspection or indexing")
 	}
 	publishing := in.Kind == ExecPublication || in.Kind == ExecVerify
 	if publishing && !ValidID(in.PublicationID) || !publishing && in.PublicationID != "" {
@@ -195,13 +199,31 @@ func (in ExecutionJobInput) Validate() error {
 		return invalid("scheduled_at", "provide a future time for a scheduled publication")
 	}
 	needsURL := in.Kind == ExecPDF || in.Kind == ExecBrowser || in.Kind == ExecInspection || in.Kind == ExecIndexNow
-	if needsURL || in.Kind == ExecSitemap && in.URL != "" {
+	if len(in.URLs) > 0 {
+		if in.Kind != ExecIndexNow || in.URL != "" || len(in.URLs) > 1000 {
+			return invalid("urls", "provide a batch of up to 1000 HTTPS URLs")
+		}
+		for _, target := range in.URLs {
+			u, err := EvidenceURL(target)
+			if err != nil || u.Scheme != "https" {
+				return invalid("urls", "provide scoped HTTPS URLs")
+			}
+		}
+	} else if needsURL || in.Kind == ExecSitemap && in.URL != "" {
 		u, err := EvidenceURL(in.URL)
 		if err != nil || u.Scheme != "https" {
 			return invalid("url", "provide a scoped HTTPS URL")
 		}
 	} else if in.URL != "" {
 		return invalid("url", "use a URL only for indexing or extraction operations")
+	}
+	if in.SearchType != "" || in.DataState != "" {
+		if in.Kind != ExecGSCSync {
+			return invalid("search_type", "use search type and data state on Search Console jobs")
+		}
+		if _, _, err := GSCSeries(in.SearchType, in.DataState); err != nil {
+			return err
+		}
 	}
 	sync := in.Kind == ExecGSCSync || in.Kind == ExecGA4Sync || in.Kind == ExecBingSync
 	if (in.From != "" || in.To != "") && !sync {
@@ -247,7 +269,28 @@ func ExecutionDateRange(from, to string) (time.Time, time.Time, error) {
 	return a, b, nil
 }
 
+func GSCSeries(searchType, state string) (string, string, error) {
+	if searchType == "" {
+		searchType = "web"
+	}
+	if state == "" {
+		state = "final"
+	}
+	switch searchType {
+	case "web", "image", "video", "news", "discover", "googleNews":
+	default:
+		return "", "", invalid("search_type", "choose a supported Google search type")
+	}
+	if state != "final" && state != "all" {
+		return "", "", invalid("data_state", "choose finalized data or include recent data")
+	}
+	return searchType, state, nil
+}
+
 func (f ExecutionFilter) ValidateReportFilters() error {
+	if _, _, err := GSCSeries(f.SearchType, f.DataState); err != nil {
+		return err
+	}
 	if len(f.Country) > 160 || hasControl(f.Country) {
 		return invalid("country", "choose a country code or display name")
 	}

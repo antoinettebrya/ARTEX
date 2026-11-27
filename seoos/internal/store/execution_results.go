@@ -47,6 +47,9 @@ func (s *Store) SaveExecutionResult(ctx context.Context, lease domain.Lease, wor
 		if !active || !c.Enabled || c.Version != work.ConnectionVersion {
 			return nil, domain.ErrExecutionAuthority
 		}
+		if err = s.fenceExecutionIntegration(ctx, tx, job.ID, &c); err != nil {
+			return nil, err
+		}
 	}
 	if result.Info != nil {
 		err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_cms_capabilities (organization_id,site_id,connection_id,data)
@@ -83,9 +86,16 @@ func (s *Store) SaveExecutionResult(ctx context.Context, lease domain.Lease, wor
 	}
 	if result.Submission != nil {
 		if err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_indexing_submissions (organization_id,site_id,job_id,provider,data)
-			VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id) DO UPDATE SET data=EXCLUDED.data`,
+			VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id)
+			DO UPDATE SET data=(seo_indexing_submissions.data-'error') || EXCLUDED.data`,
 			result.Submission, job.OrganizationID, job.SiteID, job.ID, c.Kind); err != nil {
 			return nil, err
+		}
+		if c.Managed && c.Kind == domain.ExecutionIndexNow {
+			if _, err = tx.ExecContext(ctx, `UPDATE public.seo_indexnow_site_keys SET last_submission_at=clock_timestamp(),updated_at=clock_timestamp()
+				WHERE organization_id=$1 AND site_id=$2 AND id=$3`, job.OrganizationID, job.SiteID, c.ID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if result.Sitemap != nil {
@@ -120,12 +130,17 @@ func (s *Store) SaveExecutionResult(ctx context.Context, lease domain.Lease, wor
 	if result.Sync != nil {
 		summary["rows"] = len(result.Sync.Metrics)
 		summary["truncated"] = result.Sync.Truncated
+		if result.Sync.Quality != nil {
+			summary["report_quality"] = result.Sync.Quality
+		}
 	}
 	if result.GSC != nil {
 		summary["gsc_progress"] = result.GSC
 		summary["rows"] = result.GSC.Rows
 		summary["truncated"] = result.GSC.Truncated > 0 || result.Sync != nil && result.Sync.Truncated
-		if result.GSC.Complete > 0 && result.GSC.Truncated == 0 && result.GSC.Failed == 0 {
+		searchType, dataState, _ := domain.GSCSeries(in.SearchType, in.DataState)
+		summary["search_type"], summary["data_state"] = searchType, dataState
+		if searchType == "web" && dataState == "final" && result.GSC.Complete > 0 && result.GSC.Truncated == 0 && result.GSC.Failed == 0 {
 			if err := updateExecutionFeedback(ctx, tx, c, true); err != nil {
 				return nil, err
 			}
@@ -134,6 +149,11 @@ func (s *Store) SaveExecutionResult(ctx context.Context, lease domain.Lease, wor
 	if result.Sitemap != nil {
 		summary["sitemap_urls"] = len(result.Sitemap.Entries)
 		summary["truncated"] = result.Sitemap.Truncated
+	}
+	if result.Submission != nil {
+		summary["integration_status"] = result.Submission["integration_status"]
+		summary["http_status"] = result.Submission["http_status"]
+		summary["submitted_urls"] = len(result.Indexes)
 	}
 	raw, err := saveExecutionReceipt(ctx, tx, job, summary)
 	if err != nil {
@@ -222,13 +242,17 @@ func writeExecutionSync(ctx context.Context, tx *sql.Tx, c domain.ExecutionConne
 		hash := sha256.Sum256(parts)
 		rows = append(rows, storedMetric{entry.Date, hex.EncodeToString(hash[:]), entry})
 	}
+	identity := "organization_id,site_id,connection_id,day,dimension_hash"
+	if c.Kind == domain.ExecutionGSC {
+		identity += ",search_type,data_state"
+	}
 	for start := 0; start < len(rows); start += 500 {
 		err := recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_`+c.Kind+`_daily_metrics
 			(organization_id,site_id,connection_id,day,dimension_hash,data)
 			SELECT DISTINCT ON (m.day,m.hash) $1,$2,$3,m.day,decode(m.hash,'hex'),m.data
 			FROM jsonb_to_recordset($4::jsonb) AS m(day date,hash text,data jsonb)
 			ORDER BY m.day,m.hash
-			ON CONFLICT (organization_id,site_id,connection_id,day,dimension_hash)
+			ON CONFLICT (`+identity+`)
 			DO UPDATE SET data=EXCLUDED.data,observed_at=clock_timestamp()`,
 			rows[start:min(start+500, len(rows))], c.OrganizationID, c.SiteID, c.ID)
 		if err != nil {
@@ -265,14 +289,30 @@ func (s *Store) ExecutionSyncDates(ctx context.Context, c domain.ExecutionConnec
 		return "", "", err
 	}
 	if to.IsZero() {
-		to = time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -2)
+		timeZone := c.PropertyTimeZone
+		if c.Kind == domain.ExecutionGSC {
+			timeZone = "America/Los_Angeles"
+		}
+		location := time.UTC
+		if timeZone != "" {
+			location, err = time.LoadLocation(timeZone)
+			if err != nil {
+				return "", "", err
+			}
+		}
+		now := time.Now().In(location)
+		to = time.Date(now.Year(), now.Month(), now.Day()-2, 0, 0, 0, 0, time.UTC)
 	}
 	if from.IsZero() {
 		var latest sql.NullTime
 		if c.Kind == domain.ExecutionGSC {
+			searchType, dataState, seriesErr := domain.GSCSeries(in.SearchType, in.DataState)
+			if seriesErr != nil {
+				return "", "", seriesErr
+			}
 			err = s.db.QueryRowContext(ctx, `SELECT max(day) FROM public.seo_gsc_daily_snapshots
-				WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND connection_version=$4 AND state='complete'`,
-				c.OrganizationID, c.SiteID, c.ID, c.Version).Scan(&latest)
+				WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND connection_version=$4 AND state='complete'
+				AND search_type=$5 AND data_state=$6`, c.OrganizationID, c.SiteID, c.ID, c.Version, searchType, dataState).Scan(&latest)
 		} else {
 			err = s.db.QueryRowContext(ctx, `SELECT max(day) FROM public.seo_`+c.Kind+`_daily_metrics
 				WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3`, c.OrganizationID, c.SiteID, c.ID).Scan(&latest)
@@ -293,6 +333,13 @@ func (s *Store) ExecutionSyncDates(ctx context.Context, c domain.ExecutionConnec
 }
 
 func (s *Store) BeginExecutionSubmission(ctx context.Context, lease domain.Lease, provider, url string) error {
+	return s.BeginExecutionSubmissions(ctx, lease, provider, []string{url})
+}
+
+func (s *Store) BeginExecutionSubmissions(ctx context.Context, lease domain.Lease, provider string, urls []string) error {
+	if len(urls) == 0 {
+		return domain.ErrExecutionAuthority
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -305,17 +352,17 @@ func (s *Store) BeginExecutionSubmission(ctx context.Context, lease domain.Lease
 	if job.Kind != domain.ExecIndexNow || provider != domain.ExecutionIndexNow && provider != domain.ExecutionBing {
 		return domain.ErrExecutionUnsupported
 	}
-	lock := "indexing:" + job.OrganizationID + ":" + job.SiteID + ":" + provider + ":" + url
+	lock := "indexing:" + job.OrganizationID + ":" + job.SiteID + ":" + provider
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lock); err != nil {
 		return err
 	}
 	var prior string
 	err = tx.QueryRowContext(ctx, `SELECT data->>'status' FROM public.seo_indexing_submissions
-		WHERE organization_id=$1 AND site_id=$2 AND provider=$3 AND data->>'url'=$4 AND
+		WHERE organization_id=$1 AND site_id=$2 AND provider=$3 AND (data->>'url'=ANY($4::text[]) OR data->'urls' ?| $4::text[]) AND
 			((job_id=$5 AND data->>'status' IN ('dispatching','unknown')) OR
 			(created_at >= clock_timestamp()-interval '24 hours' AND data->>'status' IN
 				('dispatching','unknown','accepted','pending_key_validation')))
-		ORDER BY created_at DESC LIMIT 1`, job.OrganizationID, job.SiteID, provider, url, job.ID).Scan(&prior)
+		ORDER BY created_at DESC LIMIT 1`, job.OrganizationID, job.SiteID, provider, urls, job.ID).Scan(&prior)
 	if err == nil {
 		code := "execution_indexing_recently_submitted"
 		if prior == "dispatching" || prior == "unknown" {
@@ -328,13 +375,20 @@ func (s *Store) BeginExecutionSubmission(ctx context.Context, lease domain.Lease
 	}
 	if err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_indexing_submissions (organization_id,site_id,job_id,provider,data)
 		VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id) DO UPDATE SET data=EXCLUDED.data`,
-		map[string]any{"url": url, "status": "dispatching"}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
+		map[string]any{"url": urls[0], "urls": urls, "batch_id": job.ID, "status": "dispatching", "requested_at": time.Now().UTC()}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) ExecutionSubmissionFailure(ctx context.Context, lease domain.Lease, provider, url string, status int, code string, unknown bool) error {
+	return s.ExecutionSubmissionsFailure(ctx, lease, provider, []string{url}, status, code, unknown)
+}
+
+func (s *Store) ExecutionSubmissionsFailure(ctx context.Context, lease domain.Lease, provider string, urls []string, status int, code string, unknown bool) error {
+	if len(urls) == 0 {
+		return domain.ErrExecutionAuthority
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -344,13 +398,19 @@ func (s *Store) ExecutionSubmissionFailure(ctx context.Context, lease domain.Lea
 	if err != nil {
 		return err
 	}
-	state := "failed"
-	if unknown {
-		state = "unknown"
+	state, label := "failed", "REJECTED"
+	switch {
+	case unknown:
+		state, label = "unknown", "RECEIPT_UNKNOWN"
+	case status == 429 || code == "execution_budget":
+		label = "RETRY_WAIT"
+	case status == 403 && provider == domain.ExecutionIndexNow:
+		label = "KEY_VERIFICATION_FAILED"
 	}
 	if err = recordExecutionJSON(ctx, tx, `INSERT INTO public.seo_indexing_submissions (organization_id,site_id,job_id,provider,data)
-		VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id) DO UPDATE SET data=EXCLUDED.data`,
-		map[string]any{"url": url, "status": state, "http_status": status, "error": code}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
+		VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT (organization_id,job_id)
+		DO UPDATE SET data=seo_indexing_submissions.data || EXCLUDED.data`,
+		map[string]any{"url": urls[0], "urls": urls, "status": state, "integration_status": label, "http_status": status, "error": code, "responded_at": time.Now().UTC()}, job.OrganizationID, job.SiteID, job.ID, provider); err != nil {
 		return err
 	}
 	if err = audit(ctx, tx, job.OrganizationID, "execution.indexing.submit_fail", job.ID, map[string]string{"provider": provider, "error": code}); err != nil {

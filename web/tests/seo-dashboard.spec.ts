@@ -478,7 +478,7 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
       "任务中心",
       "成员与权限",
       "审计日志",
-      "系统设置（规划）",
+      "系统设置",
     ],
   ];
   const mainSidebar = page.locator('[data-sidebar="sidebar"]:visible');

@@ -101,8 +101,6 @@ export const seoRoutes = {
     settings: {
       path: "/seo/system/settings",
       title: "系统设置",
-      planned: "组织级系统设置尚未开放。个人外观和布局可在页头调整。",
-      ownerOnly: true,
     },
   },
 } satisfies Record<string, Record<string, RouteDefinition>>;

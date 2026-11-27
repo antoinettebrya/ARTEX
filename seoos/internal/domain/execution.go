@@ -87,23 +87,38 @@ type ExecutionConnectionInput struct {
 }
 
 type ExecutionCredential struct {
-	Username     string     `json:"username,omitempty"`
-	Secret       string     `json:"secret,omitempty"`
-	ClientID     string     `json:"client_id,omitempty"`
-	ClientSecret string     `json:"client_secret,omitempty"`
-	RefreshToken string     `json:"refresh_token,omitempty"`
-	AccessToken  string     `json:"access_token,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	Username        string     `json:"username,omitempty"`
+	Secret          string     `json:"secret,omitempty"`
+	ClientID        string     `json:"client_id,omitempty"`
+	ClientSecret    string     `json:"client_secret,omitempty"`
+	RefreshToken    string     `json:"refresh_token,omitempty"`
+	AccessToken     string     `json:"access_token,omitempty"`
+	ExternalSubject string     `json:"external_subject,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 }
 
 type ExecutionConnection struct {
-	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
+	IntegrationAccountID    string `json:"integration_account_id,omitempty"`
+	IntegrationVersion      int64  `json:"-"`
+	IntegrationInherited    bool   `json:"-"`
+	IndexNowDirectory       string `json:"-"`
+	IndexNowVerificationURL string `json:"-"`
+	KeyVerified             bool   `json:"-"`
+	Managed                 bool   `json:"managed_integration,omitempty"`
+	LegacyKey               bool   `json:"-"`
+	PropertyTimeZone        string `json:"-"`
+	ID                      string `json:"id"`
+	OrganizationID          string `json:"organization_id"`
 	ExecutionConnectionInput
 	Version      int64           `json:"version"`
 	Configured   bool            `json:"configured"`
 	Capabilities CMSCapabilities `json:"capabilities"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+func (c ExecutionConnection) MatchesIntegration(account string, version int64) bool {
+	return c.IntegrationAccountID == account && c.IntegrationVersion == version ||
+		c.IntegrationInherited && account == "" && c.IntegrationVersion == 1
 }
 
 type ExecutionConnectionSave struct {
@@ -238,6 +253,10 @@ type ExecutionJobInput struct {
 	Operation      string     `json:"operation,omitempty"`
 	Note           string     `json:"note,omitempty"`
 	URL            string     `json:"url,omitempty"`
+	URLs           []string   `json:"urls,omitempty"`
+	Provider       string     `json:"provider,omitempty"`
+	SearchType     string     `json:"search_type,omitempty"`
+	DataState      string     `json:"data_state,omitempty"`
 	From           string     `json:"from,omitempty"`
 	To             string     `json:"to,omitempty"`
 	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
@@ -291,12 +310,25 @@ type ExecutionSitemap struct {
 }
 
 type ExecutionSync struct {
-	Properties []ExecutionProperty    `json:"properties"`
-	Metrics    []ExecutionMetric      `json:"metrics"`
-	Sitemaps   []ExecutionSitemap     `json:"sitemaps"`
-	Indexes    []ExecutionIndexRecord `json:"indexes"`
-	Requests   int                    `json:"requests"`
-	Truncated  bool                   `json:"truncated"`
+	Properties []ExecutionProperty     `json:"properties"`
+	Metrics    []ExecutionMetric       `json:"metrics"`
+	Sitemaps   []ExecutionSitemap      `json:"sitemaps"`
+	Indexes    []ExecutionIndexRecord  `json:"indexes"`
+	Requests   int                     `json:"requests"`
+	Truncated  bool                    `json:"truncated"`
+	Quality    *AnalyticsReportQuality `json:"quality,omitempty"`
+}
+
+type AnalyticsReportQuality struct {
+	TimeZone             string          `json:"time_zone,omitempty"`
+	Reason               string          `json:"empty_reason,omitempty"`
+	Sampled              bool            `json:"sampled"`
+	Thresholded          bool            `json:"thresholded"`
+	DataLossFromOtherRow bool            `json:"data_loss_from_other_row"`
+	ProviderTruncated    bool            `json:"provider_truncated,omitempty"`
+	RecentWindow         bool            `json:"recent_window,omitempty"`
+	Empty                bool            `json:"empty"`
+	Quota                json.RawMessage `json:"property_quota,omitempty"`
 }
 
 type ExecutionExtraction struct {
@@ -311,8 +343,8 @@ type ExecutionExtraction struct {
 }
 
 type ExecutionFilter struct {
-	SiteID, ConnectionID, Kind, From, To, Page, Country string
-	Limit, Offset                                       int
+	SiteID, ConnectionID, Kind, From, To, Page, Country, SearchType, DataState string
+	Limit, Offset                                                              int
 }
 
 type SitemapEntry struct {
@@ -335,11 +367,13 @@ type SitemapDocument struct {
 }
 
 type ExecutionWork struct {
-	Input             ExecutionJobInput
-	ConnectionVersion int64
-	PriorStatus       string
-	StartedWrite      bool
-	Applied           json.RawMessage
+	IntegrationAccountID string
+	IntegrationVersion   int64
+	Input                ExecutionJobInput
+	ConnectionVersion    int64
+	PriorStatus          string
+	StartedWrite         bool
+	Applied              json.RawMessage
 }
 
 type ExecutionPackage struct {

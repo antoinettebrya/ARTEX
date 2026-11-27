@@ -6,9 +6,15 @@ const (
 )
 
 type GSCCursor struct {
-	Day           string
-	TotalsChecked bool
-	NextRow       int
+	SearchType, DataState string
+	Day                   string
+	TotalsChecked         bool
+	NextRow               int
+}
+
+type GSCReportPage struct {
+	Metrics             []ExecutionMetric
+	FirstIncompleteDate string
 }
 
 type GSCProgress struct {

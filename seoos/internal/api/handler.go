@@ -93,7 +93,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		r = r.WithContext(domain.WithPrincipal(ctx, principal))
-		if h.serveAccess(w, r, principal) || h.serveRuntime(w, r, principal) || h.serveDashboard(w, r, principal) || h.serveResearch(w, r, principal) || h.serveContent(w, r, principal) || h.serveExecution(w, r, principal) {
+		if h.serveAccess(w, r, principal) || h.serveRuntime(w, r, principal) || h.serveDashboard(w, r, principal) || h.serveResearch(w, r, principal) || h.serveContent(w, r, principal) || h.serveIntegrations(w, r, principal) || h.serveExecution(w, r, principal) {
 			return
 		}
 		if (r.URL.Path == "/api/v1/sites" || strings.HasPrefix(r.URL.Path, "/api/v1/sites/")) && (r.Method == http.MethodPost || r.Method == http.MethodPut) && !principal.Role.CanWrite() {

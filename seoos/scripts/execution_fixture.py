@@ -19,14 +19,20 @@ INDEXNOW_KEY = "phase4-indexnow-key"
 INDEXNOW_RETRY_PAGE = SITE + "/indexnow-retry"
 INDEXNOW_RETRY_AFTER = 8
 GA_PROPERTY = "properties/54321"
+CENTER_HOSTS = ("center-one.example.test", "center-two.example.test")
+CENTER_PROPERTIES = ("properties/65431", "properties/65432")
+CENTER_KEYS = ("0123456789abcdef", "fedcba9876543210")
+CENTER_LOCATIONS = ("/", "/updates/")
 REPORT_DAY = (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat()
 GOOGLE_CLIENTS = {
     "gsc": ("phase4-gsc-client", "phase4-gsc-secret"),
     "ga4": ("phase4-ga4-client", "phase4-ga4-secret"),
+    "shared": ("integration-shared-client", "integration-shared-secret"),
 }
 GOOGLE_SCOPES = {
     "gsc": "https://www.googleapis.com/auth/webmasters.readonly",
     "ga4": "https://www.googleapis.com/auth/analytics.readonly",
+    "shared": "https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly",
 }
 
 SITEMAP_INDEX = (
@@ -79,6 +85,11 @@ class ExecutionHandler(BaseHTTPRequestHandler):
                 return self.cms(path.removeprefix(CMS_PREFIX), query)
             if host == HOST:
                 return self.site(path)
+            if host in CENTER_HOSTS:
+                index = CENTER_HOSTS.index(host)
+                if self.command == "GET" and path == CENTER_LOCATIONS[index] + CENTER_KEYS[index] + ".txt":
+                    return self.respond(200, "text/plain; charset=utf-8", CENTER_KEYS[index])
+                return self.respond(404, "text/plain", "not published in fixture")
             if host == "oauth2.googleapis.com":
                 return self.oauth(path)
             if host == "www.googleapis.com":
@@ -86,7 +97,7 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             if host == "searchconsole.googleapis.com":
                 return self.inspect_google(path)
             if host in ("analyticsadmin.googleapis.com", "analyticsdata.googleapis.com"):
-                return self.ga4(host, path)
+                return self.ga4(host, path, query)
             if host == "ssl.bing.com":
                 return self.bing(path, query)
             if host == "api.indexnow.org":
@@ -238,8 +249,10 @@ class ExecutionHandler(BaseHTTPRequestHandler):
         return self.respond_json(400, {"error": "invalid_grant"})
 
     def gsc(self, path):
-        self.authorized_google("gsc")
+        shared = self.authorized_google("gsc")
         root = "/webmasters/v3/sites"
+        if shared:
+            return self.center_gsc(root, path)
         properties = (SITE + "/", "sc-domain:" + HOST)
         if self.command == "GET" and path == root:
             return self.respond_json(200, {"siteEntry": [
@@ -278,19 +291,54 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             return self.respond_json(200, {"rows": rows, "responseAggregationType": "byPage"})
         return self.respond_json(404, {"error": "unsupported GSC fixture route"})
 
+    def center_gsc(self, root, path):
+        domain_properties = ["sc-domain:" + host for host in CENTER_HOSTS]
+        if self.command == "GET" and path == root:
+            return self.respond_json(200, {"siteEntry": [
+                {"siteUrl": item, "permissionLevel": "siteOwner"}
+                for item in (*domain_properties, "https://" + CENTER_HOSTS[0] + "/")
+            ]})
+        if self.command == "GET" and any(path == f"{root}/{prop}/sitemaps" for prop in domain_properties):
+            return self.respond_json(200, {"sitemap": []})
+        if self.command == "POST":
+            for prop, host in zip(domain_properties, CENTER_HOSTS):
+                if path != f"{root}/{prop}/searchAnalytics/query":
+                    continue
+                data = self.read_json()
+                if data["type"] not in ("web", "discover") or data["dataState"] not in ("final", "all"):
+                    raise ValueError("invalid GSC series")
+                dimensions = data["dimensions"]
+                if data["type"] == "discover" and "query" in dimensions:
+                    raise ValueError("Discover has no query dimension")
+                restriction = data["dimensionFilterGroups"][0]["filters"][0]
+                if restriction["dimension"] != "page" or host.replace(".", r"\.") not in restriction["expression"]:
+                    raise ValueError("incorrect site scope")
+                values = {"date": data["startDate"], "page": "https://" + host + "/existing",
+                          "query": "integration fixture", "country": "usa", "device": "MOBILE"}
+                metadata = {"first_incomplete_date": data["startDate"]} if data["dataState"] == "all" else {}
+                return self.respond_json(200, {"rows": [{
+                    "keys": [values[name] for name in dimensions], "clicks": 2,
+                    "impressions": 9, "ctr": 2 / 9, "position": 5,
+                }], "responseAggregationType": "byPage", "metadata": metadata})
+        return self.respond_json(404, {"error": "unsupported center GSC fixture route"})
+
     def inspect_google(self, path):
-        self.authorized_google("gsc")
+        shared = self.authorized_google("gsc")
         if self.command != "POST" or path != "/v1/urlInspection/index:inspect":
             return self.respond_json(404, {"error": "unsupported inspection route"})
         data = self.read_json()
-        if data.get("inspectionUrl") != PAGE or data.get("siteUrl") not in (SITE + "/", "sc-domain:" + HOST):
+        scopes = [(PAGE, SITE + "/"), (PAGE, "sc-domain:" + HOST)]
+        if shared:
+            scopes = [("https://" + host + "/existing", "sc-domain:" + host) for host in CENTER_HOSTS]
+        if (data.get("inspectionUrl"), data.get("siteUrl")) not in scopes:
             raise ValueError("out-of-scope inspection")
         return self.respond_json(200, {"inspectionResult": {"indexStatusResult": {
             "verdict": "PASS", "coverageState": "Submitted and indexed", "lastCrawlTime": REPORT_DAY + "T12:00:00Z",
         }}})
 
-    def ga4(self, host, path):
-        self.authorized_google("ga4")
+    def ga4(self, host, path, query):
+        if self.authorized_google("ga4"):
+            return self.center_ga4(host, path, query)
         if host == "analyticsadmin.googleapis.com" and path == "/v1beta/accountSummaries" and self.command == "GET":
             return self.respond_json(200, {"accountSummaries": [{"propertySummaries": [{
                 "property": GA_PROPERTY, "displayName": "Phase 4 Analytics Fixture",
@@ -313,6 +361,43 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             })
         return self.respond_json(404, {"error": "unsupported GA4 fixture route"})
 
+    def center_ga4(self, host, path, query):
+        if host == "analyticsadmin.googleapis.com" and self.command == "GET":
+            if path == "/v1beta/accountSummaries":
+                index = 1 if query.get("pageToken") == ["integration-ga4-next"] else 0
+                return self.respond_json(200, {"accountSummaries": [{
+                    "account": "accounts/123", "displayName": "Fixture Analytics",
+                    "propertySummaries": [{
+                        "property": CENTER_PROPERTIES[index], "displayName": f"Fixture GA4 {index + 1}",
+                    }],
+                }], **({} if index else {"nextPageToken": "integration-ga4-next"})})
+            for index, prop in enumerate(CENTER_PROPERTIES):
+                if path == f"/v1beta/{prop}":
+                    return self.respond_json(200, {"name": prop, "displayName": f"Fixture GA4 {index + 1}",
+                                                  "account": "accounts/123", "timeZone": "America/New_York",
+                                                  "currencyCode": "USD"})
+                if path == f"/v1beta/{prop}/dataStreams":
+                    return self.respond_json(200, {"dataStreams": [{
+                        "webStreamData": {"defaultUri": "https://" + CENTER_HOSTS[index]},
+                    }]})
+        if host == "analyticsdata.googleapis.com" and self.command == "POST":
+            for index, prop in enumerate(CENTER_PROPERTIES):
+                if path != f"/v1beta/{prop}:runReport":
+                    continue
+                data = self.read_json()
+                filters = json.dumps(data["dimensionFilter"])
+                if not data.get("returnPropertyQuota") or CENTER_HOSTS[index] not in filters or "Organic Search" not in filters:
+                    raise ValueError("GA4 data needs hostname, channel, and quota")
+                return self.respond_json(200, {
+                    "dimensionHeaders": data["dimensions"], "metricHeaders": data["metrics"], "rowCount": 0,
+                    "metadata": {"timeZone": "America/New_York",
+                                 "subjectToThresholding": True, "dataLossFromOtherRow": True,
+                                 "samplingMetadatas": [{"samplesReadCount": "75", "samplingSpaceSize": "100"}],
+                                 "emptyReason": "No fixture data for the selected date."},
+                    "propertyQuota": {"tokensPerDay": {"consumed": 1, "remaining": 199999}},
+                })
+        return self.respond_json(404, {"error": "unsupported center GA4 fixture route"})
+
     def bing(self, path, query):
         if query.get("apikey") != [BING_KEY] or self.headers.get("Authorization"):
             return self.respond_json(401, {"ErrorCode": 3})
@@ -331,7 +416,9 @@ class ExecutionHandler(BaseHTTPRequestHandler):
         day = bing_date(REPORT_DAY)
         stats = {"Date": day, "Clicks": 9, "Impressions": 91}
         data = {
-            "GetUserSites": [{"Url": SITE + "/", "IsVerified": True}],
+            "GetUserSites": [{"Url": SITE + "/", "IsVerified": True}] + [
+                {"Url": "https://" + host + "/", "IsVerified": True} for host in CENTER_HOSTS
+            ],
             "GetFeeds": [{"Url": SITE + "/sitemap.xml", "Status": "Success", "LastCrawled": day}],
             "GetRankAndTrafficStats": [stats],
             "GetQueryStats": [dict(stats, Query="phase4 bing query", AvgClickPosition=5, AvgImpressionPosition=7)],
@@ -350,6 +437,14 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             return self.respond_json(404, {"error": "unsupported IndexNow route"})
         data = self.read_json()
         targets = data.get("urlList")
+        if data.get("host") in CENTER_HOSTS:
+            index = CENTER_HOSTS.index(data["host"])
+            origin = "https://" + CENTER_HOSTS[index]
+            if (data.get("key") != CENTER_KEYS[index] or not targets or
+                    any(not value.startswith(origin + CENTER_LOCATIONS[index]) for value in targets) or
+                    data.get("keyLocation") != (origin + CENTER_LOCATIONS[index] + CENTER_KEYS[index] + ".txt" if index else None)):
+                return self.respond_json(422, {"error": "out-of-scope center IndexNow request"})
+            return self.respond(200 if index else 202, "text/plain", "")
         if (data.get("key") != INDEXNOW_KEY or targets not in ([PAGE], [INDEXNOW_RETRY_PAGE]) or
                 data.get("host") != HOST or data.get("keyLocation") != SITE + "/" + INDEXNOW_KEY + ".txt"):
             return self.respond_json(422, {"error": "out-of-scope IndexNow request"})
@@ -365,8 +460,12 @@ class ExecutionHandler(BaseHTTPRequestHandler):
         return self.respond(503, "text/plain", "unexpected retry")
 
     def authorized_google(self, kind):
-        if self.headers.get("Authorization") != f"Bearer phase4-{kind}-access":
+        auth = self.headers.get("Authorization")
+        if auth == "Bearer phase4-shared-access":
+            return True
+        if auth != f"Bearer phase4-{kind}-access":
             raise ValueError("Google reader requires the refreshed bearer")
+        return False
 
     def limit(self, query, maximum):
         value = int(query.get("limit", ["25"])[0])

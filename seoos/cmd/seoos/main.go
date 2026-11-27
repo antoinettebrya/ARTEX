@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/Autumn-27/artex/seoos/internal/api"
 	"github.com/Autumn-27/artex/seoos/internal/config"
@@ -22,7 +23,7 @@ import (
 	"github.com/Autumn-27/artex/seoos/internal/worker"
 )
 
-const usage = "Usage: seoos [serve|api|worker|migrate|health|worker-health|provision-org NAME OWNER_EMAIL]"
+const usage = "Usage: seoos [serve|api|worker|migrate|health|worker-health|provision-org NAME OWNER_EMAIL|integrations migrate-legacy [--dry-run]]"
 
 func main() {
 	if err := run(); err != nil {
@@ -44,6 +45,11 @@ func run() error {
 	switch command {
 	case "serve", "api", "worker", "migrate", "health", "worker-health":
 		if len(os.Args) > 2 {
+			return errors.New(usage)
+		}
+	case "integrations":
+		if len(os.Args) < 3 || os.Args[2] != "migrate-legacy" || len(os.Args) > 4 ||
+			len(os.Args) == 4 && os.Args[3] != "--dry-run" {
 			return errors.New(usage)
 		}
 	case "provision-org":
@@ -79,7 +85,7 @@ func run() error {
 	if err := repo.SetProviderKey(cfg.ProviderKey); err != nil {
 		return errors.New("cannot initialize provider credential encryption")
 	}
-	if command == "api" || command == "worker" {
+	if command == "api" || command == "worker" || command == "integrations" {
 		if err := repo.CheckMigrations(startup); err != nil {
 			return errors.New("SEO database schema is not ready; apply and verify migrations before starting runtime services")
 		}
@@ -87,6 +93,14 @@ func run() error {
 		if err := repo.Migrate(startup); err != nil {
 			return errors.New("SEO database migration failed; check the migration version, checksum and database permissions")
 		}
+	}
+	if command == "integrations" {
+		actor := domain.Principal{OrganizationID: cfg.OrganizationID, Role: domain.RoleOwner, Kind: "bootstrap"}
+		results, err := repo.MigrateLegacyIntegrations(domain.WithPrincipal(ctx, actor), cfg.OrganizationID, len(os.Args) == 4)
+		if err != nil {
+			return errors.New("cannot migrate the legacy search integrations; prior transactions were preserved")
+		}
+		return json.NewEncoder(os.Stdout).Encode(results)
 	}
 	if command == "provision-org" {
 		orgID, credential, err := repo.ProvisionOrganization(startup, os.Args[2], os.Args[3])

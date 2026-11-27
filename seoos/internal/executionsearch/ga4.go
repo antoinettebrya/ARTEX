@@ -1,6 +1,7 @@
 package executionsearch
 
 import (
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/url"
@@ -42,13 +43,38 @@ func (s *report) ga4(from, to string) error {
 	}
 	base, _ := siteURL(s.config.BaseURL)
 	var expectedCount *int
+	quality := &domain.AnalyticsReportQuality{TimeZone: s.config.PropertyTimeZone, Empty: true}
+	s.output.Quality = quality
 	for offset := 0; ; {
 		var data gaReport
 		query := gaQuery(base, from, to, offset)
+		if s.config.Managed {
+			query["returnPropertyQuota"] = true
+		}
 		if err := s.request(http.MethodPost, gaDataURL+"/"+property+":runReport", query, &data); err != nil {
 			return err
 		}
-		s.output.Truncated = s.output.Truncated || data.Metadata.Threshold || data.Metadata.Other || len(data.Metadata.Sampling) > 0
+		if data.Metadata.TimeZone != "" {
+			if _, err := time.LoadLocation(data.Metadata.TimeZone); err != nil || quality.TimeZone != "" && quality.TimeZone != data.Metadata.TimeZone {
+				return failure("execution_ga4_timezone_changed")
+			}
+			quality.TimeZone = data.Metadata.TimeZone
+		}
+		if location, err := time.LoadLocation(quality.TimeZone); err == nil && quality.TimeZone != "" {
+			quality.RecentWindow = to >= time.Now().In(location).AddDate(0, 0, -2).Format(time.DateOnly)
+		}
+		quality.Sampled = quality.Sampled || len(data.Metadata.Sampling) > 0
+		quality.Thresholded = quality.Thresholded || data.Metadata.Threshold
+		quality.DataLossFromOtherRow = quality.DataLossFromOtherRow || data.Metadata.Other
+		quality.ProviderTruncated = quality.ProviderTruncated || len(data.Metadata.Truncation) > 0
+		quality.Empty = quality.Empty && len(data.Rows) == 0
+		if quality.Empty && data.Metadata.EmptyReason != "" {
+			quality.Reason = "provider_report_empty"
+		}
+		if len(data.Quota) > 0 {
+			quality.Quota = data.Quota
+		}
+		s.output.Truncated = s.output.Truncated || quality.Thresholded || quality.DataLossFromOtherRow || quality.Sampled || quality.ProviderTruncated
 		if data.RowCount != nil && (*data.RowCount < 0 || expectedCount != nil && *expectedCount != *data.RowCount) {
 			s.output.Truncated = true
 		}
@@ -173,11 +199,15 @@ type gaReport struct {
 		Dimensions []gaValue `json:"dimensionValues"`
 		Metrics    []gaValue `json:"metricValues"`
 	} `json:"rows"`
-	RowCount *int `json:"rowCount"`
+	RowCount *int            `json:"rowCount"`
+	Quota    json.RawMessage `json:"propertyQuota"`
 	Metadata struct {
-		Threshold bool             `json:"subjectToThresholding"`
-		Other     bool             `json:"dataLossFromOtherRow"`
-		Sampling  []map[string]any `json:"samplingMetadatas"`
+		TimeZone    string            `json:"timeZone"`
+		EmptyReason string            `json:"emptyReason"`
+		Threshold   bool              `json:"subjectToThresholding"`
+		Other       bool              `json:"dataLossFromOtherRow"`
+		Sampling    []map[string]any  `json:"samplingMetadatas"`
+		Truncation  []json.RawMessage `json:"dataTruncationReasons"`
 	} `json:"metadata"`
 }
 

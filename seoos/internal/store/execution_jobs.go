@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
@@ -48,15 +49,39 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 	if actor.OrganizationID != org || !actor.Role.CanWrite() || executionActionOwner(in) && !executionOwner(ctx, org) {
 		return empty, false, domain.ErrExecutionAuthority
 	}
-	raw, err := json.Marshal(in)
-	if err != nil {
-		return empty, false, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, false, err
 	}
 	defer tx.Rollback()
+	if in.ConnectionID == "" {
+		// An idempotent retry keeps its original binding even if defaults changed.
+		err = tx.QueryRowContext(ctx, `SELECT coalesce(e.connection_id::text,'')
+			FROM public.seo_jobs j JOIN public.seo_execution_jobs e ON (e.organization_id,e.job_id)=(j.organization_id,j.id)
+			WHERE j.organization_id=$1 AND j.site_id=$2 AND j.idempotency_key=$3`, org, in.SiteID, in.IdempotencyKey).Scan(&in.ConnectionID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return empty, false, err
+		}
+		if in.ConnectionID == "" {
+			in.ConnectionID, err = resolveScheduledBinding(ctx, tx, org, in)
+			if err != nil {
+				return empty, false, err
+			}
+		}
+	}
+	if len(in.URLs) > 0 {
+		targets := make([]string, 0, len(in.URLs))
+		for _, value := range in.URLs {
+			u, _ := domain.EvidenceURL(value) // validated above
+			targets = append(targets, u.String())
+		}
+		slices.Sort(targets)
+		in.URLs = slices.Compact(targets)
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return empty, false, err
+	}
 	lookup := func() (domain.Job, error) {
 		job, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM public.seo_jobs
 			WHERE organization_id=$1 AND idempotency_key=$2`, org, in.IdempotencyKey))
@@ -88,6 +113,12 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 			return empty, false, domain.ErrExecutionAuthority
 		}
 	}
+	for _, target := range in.URLs {
+		u, _ := domain.EvidenceURL(target)
+		if !domain.BelongsToSite(base, u) {
+			return empty, false, domain.ErrExecutionAuthority
+		}
+	}
 	if in.Operation == "rollback" {
 		if err := supersedeExecutionVerifications(ctx, tx, org, in); err != nil {
 			return empty, false, err
@@ -103,6 +134,12 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 		if !active || !connection.Enabled || executionActionOwner(in) && !connection.AllowWrites {
 			return empty, false, domain.ErrExecutionAuthority
 		}
+		if _, _, err = s.resolveIntegration(ctx, tx, &connection, false); err != nil {
+			return empty, false, err
+		}
+	}
+	if in.Provider != "" && in.Provider != connection.Kind {
+		return empty, false, domain.ErrExecutionUnsupported
 	}
 	if !executionConnectionKind(in.Kind, connection.Kind) {
 		return empty, false, domain.ErrExecutionUnsupported
@@ -113,9 +150,11 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 				SELECT e.job_id FROM public.seo_execution_jobs e JOIN public.seo_jobs j
 				ON (j.organization_id,j.id)=(e.organization_id,e.job_id)
 				WHERE e.organization_id=$1 AND e.site_id=$2 AND e.connection_id=$3 AND e.connection_version=$4
+				AND e.integration_account_id IS NOT DISTINCT FROM NULLIF($6,'')::uuid
+				AND e.integration_account_version IS NOT DISTINCT FROM NULLIF($7,0)::bigint
 				AND (e.request - 'idempotency_key' - 'priority')=($5::jsonb - 'idempotency_key' - 'priority')
 				AND (j.state IN ('queued','running') OR (j.state='succeeded' AND j.updated_at>clock_timestamp()-interval '2 minutes'))
-				ORDER BY j.created_at DESC LIMIT 1)`, org, in.SiteID, in.ConnectionID, connection.Version, string(raw)))
+				ORDER BY j.created_at DESC LIMIT 1)`, org, in.SiteID, in.ConnectionID, connection.Version, string(raw), connection.IntegrationAccountID, connection.IntegrationVersion))
 		if existingErr == nil {
 			return existing, false, tx.Commit()
 		}
@@ -162,7 +201,7 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 			return empty, false, domain.ErrExecutionState
 		}
 	}
-	job, err := insertExecutionJob(ctx, tx, org, in, connection.Version, release.Status, available, raw)
+	job, err := insertExecutionJob(ctx, tx, org, in, connection.Version, release.Status, available, raw, connection)
 	if errors.Is(err, domain.ErrNotFound) {
 		old, e := lookup()
 		return old, false, e
@@ -183,7 +222,11 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 }
 
 func insertExecutionJob(ctx context.Context, tx *sql.Tx, org string, in domain.ExecutionJobInput, version int64,
-	prior string, available *time.Time, raw []byte) (domain.Job, error) {
+	prior string, available *time.Time, raw []byte, connections ...domain.ExecutionConnection) (domain.Job, error) {
+	var account domain.ExecutionConnection
+	if len(connections) > 0 {
+		account = connections[0]
+	}
 	job, err := scanJob(tx.QueryRowContext(ctx, `INSERT INTO public.seo_jobs (id,organization_id,site_id,kind,idempotency_key,priority,available_at)
 		VALUES ($1,$2,$3,$4,$5,$6,greatest(clock_timestamp(),COALESCE($7,clock_timestamp())))
 		ON CONFLICT (organization_id,idempotency_key) DO NOTHING RETURNING `+jobColumns,
@@ -192,9 +235,9 @@ func insertExecutionJob(ctx context.Context, tx *sql.Tx, org string, in domain.E
 		return job, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_execution_jobs (organization_id,site_id,job_id,connection_id,connection_version,
-		publication_id,request,prior_status)
-		VALUES ($1,$2,$3,NULLIF($4,'')::uuid,NULLIF($5,0),NULLIF($6,'')::uuid,$7::jsonb,NULLIF($8,''))`,
-		org, in.SiteID, job.ID, in.ConnectionID, version, in.PublicationID, string(raw), prior)
+		publication_id,request,prior_status,integration_account_id,integration_account_version)
+		VALUES ($1,$2,$3,NULLIF($4,'')::uuid,NULLIF($5,0),NULLIF($6,'')::uuid,$7::jsonb,NULLIF($8,''),NULLIF($9,'')::uuid,NULLIF($10,0))`,
+		org, in.SiteID, job.ID, in.ConnectionID, version, in.PublicationID, string(raw), prior, account.IntegrationAccountID, account.IntegrationVersion)
 	if err != nil {
 		return job, err
 	}
@@ -241,11 +284,12 @@ func supersedeExecutionVerifications(ctx context.Context, tx *sql.Tx, org string
 func (s *Store) ExecutionJob(ctx context.Context, lease domain.Lease) (domain.ExecutionWork, error) {
 	var out domain.ExecutionWork
 	var request, applied []byte
-	err := s.db.QueryRowContext(ctx, `SELECT e.request,COALESCE(e.connection_version,0),COALESCE(e.prior_status,''),e.started_write,e.applied_result
+	err := s.db.QueryRowContext(ctx, `SELECT e.request,COALESCE(e.connection_version,0),COALESCE(e.prior_status,''),e.started_write,e.applied_result,
+		coalesce(e.integration_account_id::text,''),coalesce(e.integration_account_version,0)
 		FROM public.seo_execution_jobs e JOIN public.seo_jobs j ON (j.organization_id,j.id)=(e.organization_id,e.job_id)
 		WHERE e.organization_id=$1 AND e.site_id=$2 AND e.job_id=$3 AND j.lease_token=$4 AND j.state='running' AND j.lease_until>clock_timestamp()`,
 		lease.Job.OrganizationID, lease.Job.SiteID, lease.Job.ID, lease.Token).
-		Scan(&request, &out.ConnectionVersion, &out.PriorStatus, &out.StartedWrite, &applied)
+		Scan(&request, &out.ConnectionVersion, &out.PriorStatus, &out.StartedWrite, &applied, &out.IntegrationAccountID, &out.IntegrationVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, domain.ErrLeaseLost
 	}

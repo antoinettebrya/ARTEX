@@ -2,7 +2,13 @@ import "server-only";
 
 import { type NextRequest, NextResponse } from "next/server";
 
-import { googleOAuthCallbackPath, googleOAuthResultKey } from "./google-oauth";
+import {
+  googleOAuthCallbackPath,
+  googleOAuthResultKey,
+  integrationOAuthCallbackPath,
+  integrationOAuthResultKey,
+  type OAuthIntegrationProvider,
+} from "./google-oauth";
 import { seoRoutes } from "./routes";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -27,6 +33,29 @@ const contentPagePath = new RegExp(`^/content/inventory/${ID}$`);
 const executionConnectionPath = new RegExp(`^/execution/connections/${ID}$`);
 const executionPublicationPath = new RegExp(`^/execution/publications/${ID}$`);
 const executionSitemapPath = new RegExp(`^/execution/sitemaps/${ID}$`);
+const integrationApplication = new RegExp(`^/integrations/applications/${ID}$`);
+const integrationAccount = new RegExp(`^/integrations/accounts/${ID}$`);
+const integrationAccountAction = new RegExp(
+  `^/integrations/accounts/${ID}/(?:authorize|discover|refresh|revoke|rotate-key)$`,
+);
+const integrationStart = new RegExp(`^/integrations/accounts/${ID}/authorize$`);
+const integrationBinding = new RegExp(`^/integrations/bindings/${ID}$`);
+const integrationVerify = new RegExp(`^/integrations/bindings/${ID}/verify$`);
+const integrationKeyAction = new RegExp(`^/integrations/indexnow/keys/${ID}/(?:rotate|verify)$`);
+const integrationKeyReveal = new RegExp(`^/integrations/indexnow/keys/${ID}/(?:file|reveal)$`);
+const integrationCallback = /^\/integrations\/oauth\/callback\/(google|bing)$/;
+const integrationCookiePrefix = "__Host-artex_seo_integration_";
+const integrationLists = new Set([
+  "/integrations/summary",
+  "/integrations/applications",
+  "/integrations/accounts",
+  "/integrations/bindings",
+  "/integrations/sites",
+  "/integrations/indexnow/keys",
+  "/integrations/health",
+  "/integrations/history",
+  "/integrations/usage",
+]);
 const executionLists = new Set([
   "/execution/connections",
   "/execution/packages",
@@ -36,6 +65,7 @@ const executionLists = new Set([
   "/execution/media",
   "/execution/properties",
   "/execution/metrics",
+  "/execution/report-quality",
   "/execution/snapshots",
   "/execution/index",
   "/execution/submissions",
@@ -84,6 +114,9 @@ function permits(path: string, method: string): boolean {
     case "GET":
       return (
         lists.has(path) ||
+        integrationLists.has(path) ||
+        integrationAccount.test(path) ||
+        integrationKeyReveal.test(path) ||
         researchLists.has(path) ||
         contentLists.has(path) ||
         executionLists.has(path) ||
@@ -103,6 +136,14 @@ function permits(path: string, method: string): boolean {
     case "POST":
       return (
         lists.has(path) ||
+        path === "/integrations/applications" ||
+        path === "/integrations/accounts" ||
+        path === "/integrations/bindings" ||
+        path === "/integrations/bindings/batch" ||
+        path === "/integrations/indexnow/keys" ||
+        integrationAccountAction.test(path) ||
+        integrationVerify.test(path) ||
+        integrationKeyAction.test(path) ||
         path === "/research/jobs" ||
         path === "/research/pages" ||
         path === "/content/projects" ||
@@ -119,6 +160,8 @@ function permits(path: string, method: string): boolean {
     case "PUT":
       return (
         sitePath.test(path) ||
+        integrationApplication.test(path) ||
+        integrationBinding.test(path) ||
         providerPath.test(path) ||
         memberRolePath.test(path) ||
         path === "/content/crawl" ||
@@ -126,7 +169,13 @@ function permits(path: string, method: string): boolean {
         executionConnectionPath.test(path)
       );
     case "DELETE":
-      return jobPath.test(path) || memberTokenPath.test(path);
+      return (
+        jobPath.test(path) ||
+        memberTokenPath.test(path) ||
+        integrationApplication.test(path) ||
+        integrationAccount.test(path) ||
+        integrationBinding.test(path)
+      );
     default:
       return false;
   }
@@ -324,8 +373,108 @@ async function googleBrowserCallback(request: NextRequest, origin: string) {
   return response;
 }
 
+function integrationSignature(token: string, state: string, redirect: string) {
+  return createHmac("sha256", token).update(`artex:integration-oauth-v1:${state}:${redirect}`).digest("base64url");
+}
+
+async function integrationPendingCookie(response: Response, token: string) {
+  const { state, authorization_url } = (await response.json()) as { state?: unknown; authorization_url?: unknown };
+  if (typeof state !== "string" || !googleOAuthState.test(state) || typeof authorization_url !== "string") return;
+  const authorize = new URL(authorization_url);
+  const redirect = authorize.searchParams.get("redirect_uri");
+  if (!redirect || authorize.searchParams.get("state") !== state) return;
+  const callback = new URL(redirect);
+  const allowed =
+    (authorize.origin === "https://accounts.google.com" &&
+      authorize.pathname === "/o/oauth2/v2/auth" &&
+      callback.pathname === integrationOAuthCallbackPath("google")) ||
+    (authorize.origin === "https://www.bing.com" &&
+      authorize.pathname === "/webmasters/oauth/authorize" &&
+      callback.pathname === integrationOAuthCallbackPath("bing"));
+  if (
+    !allowed ||
+    callback.protocol !== "https:" ||
+    callback.search ||
+    callback.hash ||
+    callback.username ||
+    callback.password
+  )
+    return;
+  return {
+    name: integrationCookiePrefix + state,
+    value: `${Buffer.from(redirect).toString("base64url")}.${integrationSignature(token, state, redirect)}`,
+  };
+}
+
+async function integrationBrowserCallback(request: NextRequest, origin: string, provider: OAuthIntegrationProvider) {
+  if (request.method !== "GET")
+    return new NextResponse(null, { status: 405, headers: { ...callbackHeaders, Allow: "GET" } });
+  const params = request.nextUrl.searchParams;
+  const states = params.getAll("state");
+  const codes = params.getAll("code");
+  const errors = params.getAll("error");
+  const [state] = states;
+  const [code] = codes;
+  const [providerError] = errors;
+  const hasGrant = codes.length === 1 && /^[\x21-\x7e]{1,4096}$/.test(code) && errors.length === 0;
+  const hasError = errors.length === 1 && /^[a-zA-Z_]{1,64}$/.test(providerError) && codes.length === 0;
+  if (states.length !== 1 || !googleOAuthState.test(state) || (!hasGrant && !hasError)) {
+    return googleCallbackProblem(400, "invalid_integration_callback");
+  }
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token || !ACCEPTED_TOKEN.test(token)) return googleCallbackProblem(401, "unauthorized");
+  const name = integrationCookiePrefix + state;
+  const raw = request.cookies.get(name)?.value ?? "";
+  const match = /^([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})$/.exec(raw);
+  if (!match) return googleCallbackProblem(403, "invalid_integration_state");
+  const redirect = Buffer.from(match[1], "base64url").toString("utf8");
+  const expected = integrationSignature(token, state, redirect);
+  if (!timingSafeEqual(Buffer.from(expected), Buffer.from(match[2]))) {
+    return googleCallbackProblem(403, "invalid_integration_state");
+  }
+  const callback = new URL(redirect);
+  const host = request.headers.get("host") ?? request.nextUrl.host;
+  if (
+    callback.protocol !== "https:" ||
+    callback.host !== host ||
+    callback.pathname !== integrationOAuthCallbackPath(provider)
+  ) {
+    return googleCallbackProblem(403, "integration_callback_mismatch");
+  }
+  const payload = new URLSearchParams({
+    state,
+    redirect_uri: redirect,
+    [hasGrant ? "code" : "error"]: hasGrant ? code : providerError,
+  });
+  let result = "failed";
+  try {
+    const response = await upstream(origin, `/integrations/oauth/callback/${provider}?${payload}`, token, "GET");
+    if (response.ok) {
+      const body = (await response.json()) as { connected?: unknown; cancelled?: unknown };
+      if (body.connected === true) result = "connected";
+      if (body.cancelled === true) result = "cancelled";
+    }
+  } catch {
+    // Clear the temporary cookie and return a safe result on transport failures.
+  }
+  const destination = new URL(seoRoutes.system.settings.path, callback.origin);
+  if (request.nextUrl.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(callback.hostname)) {
+    destination.protocol = "http:";
+  }
+  destination.search = new URLSearchParams({ tab: "accounts", [integrationOAuthResultKey]: result }).toString();
+  const response = NextResponse.redirect(destination, { status: 303, headers: callbackHeaders });
+  response.cookies.set(name, "", { ...googleCookieOptions, maxAge: 0 });
+  return response;
+}
+
 export async function seoProxy(request: NextRequest, origin: string, path: string) {
-  if (path === googleCallback) return googleBrowserCallback(request, origin);
+  const callback = integrationCallback.exec(path);
+  if (callback) {
+    const state = request.nextUrl.searchParams.get("state") ?? "";
+    const managed = googleOAuthState.test(state) && request.cookies.has(integrationCookiePrefix + state);
+    if (path === googleCallback && !managed) return googleBrowserCallback(request, origin);
+    return integrationBrowserCallback(request, origin, callback[1] as OAuthIntegrationProvider);
+  }
   const method = request.method;
   if (method !== "GET" && method !== "HEAD" && !sameOrigin(request)) {
     return problem(403, "forbidden_origin");
@@ -342,13 +491,20 @@ export async function seoProxy(request: NextRequest, origin: string, path: strin
     const body = expectsBody ? await readBody(request, bodyLimit) : undefined;
     const response = await upstream(origin, path + request.nextUrl.search, token, method, body);
     const contentType = response.headers.get("Content-Type");
-    const pending =
-      path === "/execution/oauth/start" && method === "POST" && body && response.ok
-        ? await googlePendingCookie(response.clone(), body, token)
-        : undefined;
+    let pending: { name: string; value: string } | undefined;
+    if (method === "POST" && body && response.ok) {
+      if (path === "/execution/oauth/start") pending = await googlePendingCookie(response.clone(), body, token);
+      if (integrationStart.test(path)) pending = await integrationPendingCookie(response.clone(), token);
+    }
+    const responseHeaders: Record<string, string> = { ...headers };
+    if (contentType) responseHeaders["Content-Type"] = contentType;
+    if (integrationKeyReveal.test(path) && path.endsWith("/file")) {
+      const disposition = response.headers.get("content-disposition");
+      if (disposition) responseHeaders["Content-Disposition"] = disposition;
+    }
     const proxyResponse = new NextResponse(response.body, {
       status: response.status,
-      headers: contentType ? { ...headers, "Content-Type": contentType } : headers,
+      headers: responseHeaders,
     });
     if (pending) proxyResponse.cookies.set(pending.name, pending.value, googleCookieOptions);
     return proxyResponse;
