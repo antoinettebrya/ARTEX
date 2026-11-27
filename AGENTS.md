@@ -11,6 +11,7 @@ The final product must not retain penetration-testing workflows, exploit workflo
 ## Git and change safety
 
 - Work on `seo-os-v1` or a dedicated feature branch based on it. Never commit directly to `main`.
+- After validating and committing development work, push the working branch to GitHub and verify the remote commit before reporting completion.
 - Inspect `git status`, current branch, and recent commits before editing.
 - Do not overwrite or discard user changes.
 - Keep changes scoped; do not perform unrelated cleanup.
@@ -54,6 +55,6 @@ At the end of each implementation task, report:
 2. tests/commands actually run and their results;
 3. browser/visual checks actually performed;
 4. remaining gaps and risks;
-5. commit/branch information.
+5. the GitHub branch and verified commit, or the reason the push could not be completed.
 
 Do not mark a feature complete merely because code was generated.
