@@ -427,6 +427,10 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page).toHaveURL(
     (url) => url.searchParams.get("site_id") === siteID && !url.searchParams.has("project_id"),
   );
+  await expect(projectList).toBeVisible();
+  await expect(page.getByLabel("章节 1 正文", { exact: true })).toHaveCount(0);
+  await projectList.locator(`a[href*="project_id=${projectID}"]`).click();
+  await expect(page).toHaveURL(atProject("/seo/content/article"));
   await expect(page.getByLabel("内容项目", { exact: true })).toHaveValue(projectID);
   await expect(page.getByLabel("章节 1 正文", { exact: true })).toBeVisible();
 

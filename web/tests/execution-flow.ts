@@ -357,6 +357,9 @@ export async function runExecutionFlow({
   await submitTask("同步 Search Console");
   const metrics = page.getByRole("table", { name: "Search Console 指标", exact: true });
   await expect(metrics).toContainText("phase4 organic query");
+  const snapshot = page.getByRole("table", { name: "Search Console 每日快照", exact: true });
+  await expect(snapshot.getByRole("row").filter({ hasText: reportDay })).toContainText("采集完成");
+  await expect(snapshot).toContainText("12012");
   await page.getByLabel("页面 URL", { exact: true }).fill(`${siteURL}/existing`);
   await page.getByLabel("国家代码", { exact: true }).fill("ESP");
   await page.getByRole("button", { name: "筛选指标", exact: true }).click();

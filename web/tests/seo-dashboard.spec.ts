@@ -607,6 +607,19 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
     .first()
     .click();
   await expect(page.getByRole("dialog", { name: "站点资料快照" })).toBeVisible();
+  await page.goto(`/seo/system/jobs?site_id=${active.id}`);
+  const filteredJobs = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname === "/seo/api/jobs" &&
+      url.searchParams.get("site_id") === active.id &&
+      url.searchParams.get("state") === "succeeded" &&
+      url.searchParams.get("limit") === "51"
+    );
+  });
+  await page.getByLabel("任务状态", { exact: true }).selectOption("succeeded");
+  expect((await filteredJobs).ok()).toBe(true);
+  await expect(page.getByRole("table", { name: "任务队列" })).toContainText("站点资料快照");
   await page.goto("/seo/system/theme-factory");
   await expect(page.getByRole("heading", { name: "WordPress 主题工厂", level: 1 })).toBeVisible();
   await expect(page.getByText("尚未开放", { exact: true })).toBeVisible();
