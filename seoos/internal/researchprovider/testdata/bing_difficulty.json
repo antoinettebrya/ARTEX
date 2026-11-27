@@ -1,0 +1,43 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.01212,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "result_count": 1,
+      "cost": 0.01212,
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "bulk_keyword_difficulty",
+        "se_type": "bing",
+        "location_code": 2840,
+        "language_code": "en",
+        "keywords": [
+          "dentist new york"
+        ]
+      },
+      "result": [
+        {
+          "se_type": "bing",
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 1,
+          "items_count": 1,
+          "items": [
+            {
+              "se_type": "bing",
+              "keyword": "dentist new york",
+              "keyword_difficulty": 65
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

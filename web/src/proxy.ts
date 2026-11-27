@@ -1,13 +1,29 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+
+import { SEO_HOME } from "@/lib/seo/routes";
+import { seoProxy } from "@/lib/seo/server";
 
 const AUTH_PAGES = ["/login", "/setup"];
 
 export function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const isSEO = pathname === "/seo" || pathname.startsWith("/seo/");
+  const isAPI = pathname === "/api" || pathname.startsWith("/api/");
+  const seoOrigin = process.env.SEOOS_API_ORIGIN;
+  if (seoOrigin) {
+    if (pathname.startsWith("/seo/api/")) return seoProxy(request, seoOrigin, pathname.slice("/seo/api".length));
+    if (pathname === "/seo") return NextResponse.redirect(new URL(SEO_HOME, request.url));
+    if (isSEO) return NextResponse.next();
+    if (isAPI) return new NextResponse(null, { status: 404 });
+    return NextResponse.redirect(new URL(SEO_HOME, request.url));
+  }
+  if (isSEO) return new NextResponse(null, { status: 404 });
+  if (isAPI) return NextResponse.next();
+
   // Mock demo：无真实登录，放行所有页面（客户端 auth 守卫也会放行）。
   if (process.env.NEXT_PUBLIC_MOCK === "1") return NextResponse.next();
 
-  const { pathname } = request.nextUrl;
   const token = request.cookies.get("artex_token")?.value;
   const isAuthPage = AUTH_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
@@ -25,6 +41,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // 跳过 Next.js 内部路由、API 路由、favicon 及 public/ 下的静态文件（含图片、字体等）
-  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|api/|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|otf)$).*)"],
+  // 跳过 Next.js 内部路由、favicon 及 public/ 下的静态文件（含图片、字体等）
+  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|otf)$).*)"],
 };

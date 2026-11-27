@@ -1,0 +1,55 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.0101,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.0101,
+      "result_count": 1,
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "keyword_suggestions",
+        "se_type": "google",
+        "location_code": 2392,
+        "language_code": "ja",
+        "keyword": "携帯"
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "location_code": 2392,
+          "language_code": "ja",
+          "total_count": 1,
+          "items_count": 1,
+          "offset": 0,
+          "offset_token": null,
+          "items": [
+            {
+              "se_type": "google",
+              "keyword": "携帯 比較",
+              "location_code": 2392,
+              "language_code": "ja",
+              "keyword_info": {
+                "search_volume": 1600,
+                "cpc": 0,
+                "competition": 0
+              },
+              "keyword_properties": {
+                "keyword_difficulty": null
+              },
+              "search_intent_info": {
+                "main_intent": "commercial"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

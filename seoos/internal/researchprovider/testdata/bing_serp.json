@@ -1,0 +1,89 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.002,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "cost": 0.002,
+      "result_count": 1,
+      "data": {
+        "api": "serp",
+        "function": "live",
+        "se": "bing",
+        "se_type": "organic",
+        "location_code": 2250,
+        "language_code": "fr",
+        "device": "mobile",
+        "os": "android"
+      },
+      "result": [
+        {
+          "keyword": "C++ at 100%",
+          "type": "organic",
+          "se_domain": "bing.com",
+          "location_code": 2250,
+          "language_code": "fr",
+          "check_url": "https://www.bing.com/search?q=C%2B%2B",
+          "datetime": "2024-10-01 10:11:12 +00:00",
+          "items_count": 7,
+          "items": [
+            {
+              "type": "organic",
+              "rank_group": 10,
+              "rank_absolute": 17,
+              "url": "https://sample.org/topics",
+              "domain": null,
+              "title": "Topics",
+              "description": null
+            },
+            {
+              "type": "paid",
+              "rank_group": 1,
+              "rank_absolute": 1,
+              "url": "https://example.net/paid"
+            },
+            {
+              "type": "featured_snippet",
+              "rank_group": 1,
+              "rank_absolute": 2,
+              "url": "https://example.net/snippet"
+            },
+            {
+              "type": "organic",
+              "rank_group": 1,
+              "rank_absolute": 3,
+              "url": "https://www.example.com/learn",
+              "domain": "www.example.com",
+              "title": "Learn",
+              "description": "A search result"
+            },
+            {
+              "type": "organic",
+              "rank_group": 1,
+              "rank_absolute": 4,
+              "url": "https://example.net/duplicate"
+            },
+            {
+              "type": "organic",
+              "rank_group": 8,
+              "rank_absolute": 15,
+              "url": "mailto:example@example.net"
+            },
+            {
+              "type": "organic",
+              "rank_group": 11,
+              "rank_absolute": 18,
+              "url": "https://example.net/after"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

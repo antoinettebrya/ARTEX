@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Check, KeyRound, LogOut } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +20,9 @@ import { ChangePasswordDialog } from "./change-password-dialog";
 
 export function AccountSwitcher({
   users,
+  onLogout,
 }: {
+  readonly onLogout?: () => void;
   readonly users: ReadonlyArray<{
     readonly id: string;
     readonly name: string;
@@ -28,10 +31,12 @@ export function AccountSwitcher({
     readonly role: string;
   }>;
 }) {
-  const [activeUser, setActiveUser] = useState(users[0]);
+  const [activeID, setActiveID] = useState(users[0]?.id);
+  const activeUser = users.find((user) => user.id === activeID) ?? users[0];
   const [pwOpen, setPwOpen] = useState(false);
 
   function handleLogout() {
+    if (onLogout) return onLogout();
     auth.clearToken();
     window.location.href = "/login";
   }
@@ -44,10 +49,12 @@ export function AccountSwitcher({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Avatar className="size-8 rounded-lg">
-            <AvatarImage src={activeUser.avatar || undefined} alt={activeUser.name} />
-            <AvatarFallback>{getInitials(activeUser.name)}</AvatarFallback>
-          </Avatar>
+          <Button type="button" size="icon" variant="ghost" className="size-8 rounded-lg" aria-label="账号菜单">
+            <Avatar className="size-8 rounded-lg">
+              <AvatarImage src={activeUser.avatar || undefined} alt={activeUser.name} />
+              <AvatarFallback>{getInitials(activeUser.name)}</AvatarFallback>
+            </Avatar>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="min-w-56 space-y-1 rounded-lg" side="bottom" align="end" sideOffset={4}>
           {users.map((user) => (
@@ -55,7 +62,7 @@ export function AccountSwitcher({
               key={user.email}
               className={cn("p-0", user.id === activeUser.id && "bg-accent/50")}
               aria-current={user.id === activeUser.id ? "true" : undefined}
-              onClick={() => setActiveUser(user)}
+              onClick={() => setActiveID(user.id)}
             >
               <div className="flex w-full items-center gap-2 px-1 py-1.5">
                 <Avatar className="size-9 rounded-lg">
@@ -78,17 +85,19 @@ export function AccountSwitcher({
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => setPwOpen(true)}>
-            <KeyRound />
-            修改密码
-          </DropdownMenuItem>
+          {!onLogout && (
+            <DropdownMenuItem onClick={() => setPwOpen(true)}>
+              <KeyRound />
+              修改密码
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
             <LogOut />
             退出登录
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
+      {!onLogout && <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />}
     </>
   );
 }

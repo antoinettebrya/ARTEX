@@ -17,7 +17,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
-import type { NavMainItem } from "@/navigation/sidebar/sidebar-items";
+import type { NavGroup, NavMainItem } from "@/navigation/sidebar/sidebar-items";
 import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
 
 type SearchItem = {
@@ -30,44 +30,44 @@ type SearchItem = {
   newTab?: boolean;
 };
 
-const sidebarGroupLabels = new Set(sidebarItems.flatMap((group) => (group.label ? [group.label] : [])));
+function getSearchItems(items: readonly NavGroup[]): SearchItem[] {
+  const sidebarGroupLabels = new Set(items.flatMap((group) => (group.label ? [group.label] : [])));
 
-function getSubItemGroup(groupLabel: string | undefined, itemTitle: string) {
-  return sidebarGroupLabels.has(itemTitle) ? (groupLabel ?? "Other") : itemTitle;
+  function getSubItemGroup(groupLabel: string | undefined, itemTitle: string) {
+    return sidebarGroupLabels.has(itemTitle) ? (groupLabel ?? "Other") : itemTitle;
+  }
+
+  return items.flatMap((group) =>
+    group.items.flatMap((item) => {
+      if (item.subItems) {
+        return item.subItems.map((sub) => ({
+          id: sub.id,
+          group: getSubItemGroup(group.label, item.title),
+          label: sub.title,
+          url: sub.url,
+          icon: item.icon,
+          disabled: sub.disabled,
+          newTab: sub.newTab,
+        }));
+      }
+      return [
+        {
+          id: item.id,
+          group: group.label ?? "Other",
+          label: item.title,
+          url: item.url,
+          icon: item.icon,
+          disabled: item.disabled,
+          newTab: item.newTab,
+        },
+      ];
+    }),
+  );
 }
-
-const searchItems: SearchItem[] = sidebarItems.flatMap((group) =>
-  group.items.flatMap((item) => {
-    if (item.subItems) {
-      return item.subItems.map((sub) => ({
-        id: sub.id,
-        group: getSubItemGroup(group.label, item.title),
-        label: sub.title,
-        url: sub.url,
-        icon: item.icon,
-        disabled: sub.disabled,
-        newTab: sub.newTab,
-      }));
-    }
-    return [
-      {
-        id: item.id,
-        group: group.label ?? "Other",
-        label: item.title,
-        url: item.url,
-        icon: item.icon,
-        disabled: item.disabled,
-        newTab: item.newTab,
-      },
-    ];
-  }),
-);
 
 function getAvailableItems(items: SearchItem[]) {
   return items.filter((item) => !item.disabled && !item.url.includes("coming-soon"));
 }
-
-const recommendations = getAvailableItems(searchItems);
 
 function groupBy(items: SearchItem[]) {
   const groups = [...new Set(items.map((item) => item.group))];
@@ -77,7 +77,9 @@ function groupBy(items: SearchItem[]) {
   }));
 }
 
-export function SearchDialog() {
+export function SearchDialog({ items = sidebarItems }: { items?: readonly NavGroup[] }) {
+  const searchItems = React.useMemo(() => getSearchItems(items), [items]);
+  const recommendations = getAvailableItems(searchItems);
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const router = useRouter();

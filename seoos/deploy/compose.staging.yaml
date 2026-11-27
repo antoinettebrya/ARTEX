@@ -1,0 +1,104 @@
+name: artex-seoos-staging
+
+x-log: &logs
+  driver: json-file
+  options: { max-size: 10m, max-file: "3" }
+
+x-storage-env: &storage-env
+  SEOOS_DATABASE_URL: postgres://seoos:${POSTGRES_PASSWORD:?Set the database password}@postgres:5432/${ARTEX_DATABASE_NAME:-seoos}?sslmode=disable
+  SEOOS_PROVIDER_KEY: ${SEOOS_PROVIDER_KEY:?Set the encryption key}
+
+x-api-env: &api-env
+  <<: *storage-env
+  SEOOS_ORGANIZATION_ID: ${SEOOS_ORGANIZATION_ID:?Set the staging organization ID}
+  SEOOS_ORGANIZATION_NAME: ARTEX SEO OS
+  SEOOS_API_TOKEN: ${SEOOS_API_TOKEN:?Set the staging operator token}
+  SEOOS_ADDR: 0.0.0.0:8789
+
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs: [/tmp:mode=1777]
+  stop_grace_period: 20s
+  logging: *logs
+
+services:
+  postgres:
+    image: ${ARTEX_POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seoos
+      POSTGRES_DB: seoos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set the database password}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [database]
+    healthcheck:
+      test: [CMD, pg_isready, -U, seoos, -d, seoos]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    logging: *logs
+  migrate:
+    <<: *runtime
+    image: ${ARTEX_API_IMAGE:?Select the API release image}
+    command: [migrate]
+    restart: "no"
+    profiles: [migration]
+    environment: *api-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [database]
+  api:
+    <<: *runtime
+    image: ${ARTEX_API_IMAGE:?Select the API release image}
+    command: [api]
+    environment: *api-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [application, database]
+    healthcheck:
+      test: [CMD, /usr/local/bin/seoos, health]
+      interval: 8s
+      timeout: 4s
+      start_period: 10s
+      retries: 4
+  worker:
+    <<: *runtime
+    image: ${ARTEX_WORKER_IMAGE:?Select the worker release image}
+    command: [worker]
+    environment: *storage-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [application, database]
+    healthcheck:
+      test: [CMD, /usr/local/bin/seoos, worker-health]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+  web:
+    <<: *runtime
+    image: ${ARTEX_WEB_IMAGE:?Select the web release image}
+    environment:
+      SEOOS_API_ORIGIN: http://api:8789
+    depends_on:
+      api: { condition: service_healthy }
+    ports: ["127.0.0.1:${ARTEX_WEB_PORT:-18889}:3000"]
+    networks: [application]
+    tmpfs: ["/tmp:mode=1777", "/app/.next/cache:uid=1000,gid=1000,mode=0750"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/seo/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      start_period: 15s
+      retries: 4
+
+networks:
+  application: {}
+  database: { internal: true }
+
+volumes:
+  postgres-data: {}

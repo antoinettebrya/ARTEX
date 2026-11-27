@@ -21,7 +21,9 @@ import { ChangePasswordDialog } from "./change-password-dialog";
 
 export function NavUser({
   user,
+  onLogout,
 }: {
+  readonly onLogout?: () => void;
   readonly user: {
     readonly name: string;
     readonly email: string;
@@ -32,6 +34,7 @@ export function NavUser({
   const [pwOpen, setPwOpen] = React.useState(false);
 
   function handleLogout() {
+    if (onLogout) return onLogout();
     auth.clearToken();
     // 硬跳转：让浏览器用已清除的 cookie 发起全新请求，
     // middleware 才能正确读到空 token 并放行 /login
@@ -77,11 +80,15 @@ export function NavUser({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setPwOpen(true)}>
-              <KeyRound />
-              修改密码
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            {!onLogout && (
+              <>
+                <DropdownMenuItem onClick={() => setPwOpen(true)}>
+                  <KeyRound />
+                  修改密码
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
               <LogOut />
               退出登录
@@ -89,7 +96,7 @@ export function NavUser({
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
-      <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
+      {!onLogout && <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />}
     </SidebarMenu>
   );
 }

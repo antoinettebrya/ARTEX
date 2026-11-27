@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const isExport = process.env.NEXT_EXPORT === "1";
 // Vercel demo：整站走 mock，无后端，无需 /api 反代。
 const isMock = process.env.NEXT_PUBLIC_MOCK === "1";
+const isSEOStandalone = process.env.SEOOS_WEB_STANDALONE === "1";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -30,13 +31,15 @@ const nextConfig = {
           // Vercel mock demo：无后端，不需要 /api 反代。
           images: { unoptimized: true },
         }
-      : {
-          // 开发：把 /api/* 反代到 Go 后端（默认 :8787，可用 AUTOPENTEST_API 覆盖）。
-          async rewrites() {
-            const backend = process.env.AUTOPENTEST_API ?? "http://localhost:8787";
-            return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
-          },
-        }),
+      : isSEOStandalone
+        ? { output: "standalone" }
+        : {
+            // 开发：把 /api/* 反代到 Go 后端（默认 :8787，可用 AUTOPENTEST_API 覆盖）。
+            async rewrites() {
+              const backend = process.env.AUTOPENTEST_API ?? "http://localhost:8787";
+              return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
+            },
+          }),
 };
 
 export default nextConfig;

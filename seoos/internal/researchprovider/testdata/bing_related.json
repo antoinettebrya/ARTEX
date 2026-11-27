@@ -1,0 +1,55 @@
+{
+  "version": "0.1.20241227",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "cost": 0.01212,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "fixture-1",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "result_count": 1,
+      "cost": 0.01212,
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "related_keywords",
+        "se_type": "bing",
+        "location_code": 2840,
+        "language_code": "en",
+        "keyword": "phone"
+      },
+      "result": [
+        {
+          "se_type": "bing",
+          "location_code": 2840,
+          "language_code": "en",
+          "seed_keyword": "phone",
+          "seed_keyword_data": null,
+          "items_count": 1,
+          "items": [
+            {
+              "se_type": "bing",
+              "depth": 1,
+              "keyword_data": {
+                "se_type": "bing",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword": "android phone",
+                "keyword_info": {
+                  "search_volume": 220,
+                  "cpc": null,
+                  "competition": 0.1
+                },
+                "keyword_properties": {
+                  "keyword_difficulty": 17
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
