@@ -179,7 +179,8 @@ func (c *Client) verifyGAProperty(ctx context.Context, access domain.Integration
 	for range maxDiscoveryRequests {
 		var list struct {
 			Streams []struct {
-				Web struct {
+				Name string `json:"name"`
+				Web  struct {
 					URL string `json:"defaultUri"`
 				} `json:"webStreamData"`
 			} `json:"dataStreams"`
@@ -190,15 +191,20 @@ func (c *Client) verifyGAProperty(ctx context.Context, access domain.Integration
 		}
 		for _, stream := range list.Streams {
 			parsed, err := siteURL(stream.Web.URL)
-			if err == nil && !slices.Contains(result.StreamHosts, parsed.Hostname()) {
-				result.StreamHosts = append(result.StreamHosts, parsed.Hostname())
+			if err != nil || !targetWithin(parsed, base.String()) {
+				continue
+			}
+			streamID, found := strings.CutPrefix(stream.Name, id+"/dataStreams/")
+			if found && gaWebStreamID.MatchString(streamID) && !slices.Contains(result.WebStreamIDs, streamID) {
+				result.StreamHosts = []string{base.Hostname()}
+				result.WebStreamIDs = append(result.WebStreamIDs, streamID)
 			}
 		}
 		if list.Next == "" {
 			if !slices.Contains(result.StreamHosts, base.Hostname()) {
 				return result, failure("integration_ga4_stream_scope_mismatch")
 			}
-			slices.Sort(result.StreamHosts)
+			slices.Sort(result.WebStreamIDs)
 			result.URL = strings.ToLower(base.Hostname())
 			return result, nil
 		}

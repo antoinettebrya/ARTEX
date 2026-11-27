@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -309,7 +310,11 @@ func (h *handler) verifyAndSaveBinding(ctx context.Context, repo integrationRepo
 	if err != nil {
 		return empty, err
 	}
-	return repo.SaveIntegrationBinding(ctx, org, id, input, site, resource, access.Account.Version)
+	binding, err := repo.SaveIntegrationBinding(ctx, org, id, input, site, resource, access.Account.Version)
+	if errors.Is(err, domain.ErrConflict) {
+		return empty, domain.ErrIntegrationBindingConflict
+	}
+	return binding, err
 }
 
 func (h *handler) integrationBinding(w http.ResponseWriter, r *http.Request, repo integrationRepository, org string, part []string) {
@@ -376,7 +381,9 @@ func (h *handler) integrationBindingBatch(w http.ResponseWriter, r *http.Request
 	directories := make(map[bindingDirectoryKey][]domain.IntegrationResource)
 	for _, item := range input.Items {
 		value, err := h.verifyAndSaveBinding(r.Context(), repo, org, "", item, directories)
-		if err != nil {
+		if errors.Is(err, domain.ErrIntegrationBindingConflict) {
+			results = append(results, bindingResult{SiteID: item.SiteID, Status: "conflict"})
+		} else if err != nil {
 			results = append(results, bindingResult{SiteID: item.SiteID, Status: "not_verified"})
 		} else {
 			results = append(results, bindingResult{SiteID: item.SiteID, ID: value, Status: "bound"})
@@ -407,6 +414,9 @@ func (h *handler) integrationIndexNow(w http.ResponseWriter, r *http.Request, re
 		}
 		value, err := repo.SaveIndexNowKey(ctx, org, id, *input)
 		if err != nil {
+			if errors.Is(err, domain.ErrConflict) {
+				err = domain.ErrIntegrationBindingConflict
+			}
 			executionResult(w, 200, nil, err)
 			return
 		}

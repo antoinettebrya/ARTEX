@@ -41,6 +41,8 @@ export type Account = {
   auth_mode: "oauth" | "api_key";
   granted_scopes: string[];
   authorization_status: string;
+  identity_status: "VERIFIED" | "UNVERIFIED" | "UNAVAILABLE";
+  identity_verified_at?: string;
   expires_at?: string;
   last_refresh_at?: string;
   credential_version: number;

@@ -20,8 +20,9 @@ import (
 // Store owns a PostgreSQL connection pool. Every site operation requires an
 // organization ID supplied by the authenticated service, never by a request body.
 type Store struct {
-	db             *sql.DB
-	providerCipher cipher.AEAD
+	db                  *sql.DB
+	providerCipher      cipher.AEAD
+	integrationMatchKey [32]byte
 }
 
 // Open validates the connection configuration and verifies connectivity. It does

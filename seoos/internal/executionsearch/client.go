@@ -17,6 +17,7 @@ import (
 
 	"github.com/Autumn-27/artex/seoos/internal/domain"
 	"github.com/Autumn-27/artex/seoos/internal/providerhttp"
+	"github.com/coreos/go-oidc/v3/oidc"
 )
 
 const (
@@ -36,7 +37,8 @@ const (
 var errRequestLimit = errors.New("search report request limit")
 
 type Client struct {
-	http *http.Client
+	http       *http.Client
+	googleKeys oidc.KeySet
 }
 
 // New refuses redirects. The optional client can supply a custom transport
@@ -55,7 +57,7 @@ func New(client *http.Client) *Client {
 	}
 	copy.Jar = nil
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{http: &copy}
+	return &Client{http: &copy, googleKeys: googleIdentityKeys(&copy)}
 }
 
 func failure(code string) error { return &domain.DataError{Code: code} }

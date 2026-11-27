@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { errorMessage, seoRequest } from "@/lib/seo/client";
+import { errorMessage, SeoAPIError, seoRequest } from "@/lib/seo/client";
 
 import { useSiteScope } from "../context";
 import { ConfirmChange, Field, FormDialog, field, RecordsTable, useSeoRecords } from "../shared";
@@ -20,6 +20,7 @@ import { type IndexNowKey, listPath } from "./model";
 
 type KeyMaterial = { key: string; verification_url: string; filename: string };
 type Open = { mode: "create" } | { mode: "rotate" | "verify" | "reveal" | "submit"; item: IndexNowKey };
+const indexNowMaxURLs = 1000;
 
 export function IndexNowPanel({ owner, siteID }: { owner: boolean; siteID?: string }) {
   const sites = useSiteScope();
@@ -109,7 +110,7 @@ export function IndexNowPanel({ owner, siteID }: { owner: boolean; siteID?: stri
                 body: {
                   site_id: item?.site_id ?? field(data, "site_id"),
                   directory: field(data, "directory"),
-                  key: field(data, "key").trim() || undefined,
+                  key: field(data, "key") || undefined,
                   version: item?.version,
                   allow_writes: data.has("allow_writes"),
                 },
@@ -151,7 +152,8 @@ export function IndexNowPanel({ owner, siteID }: { owner: boolean; siteID?: stri
               type="password"
               autoComplete="new-password"
               placeholder="留空自动生成"
-              pattern="[0-9a-fA-F\-]{8,128}"
+              pattern="[A-Za-z0-9\-]{8,128}"
+              maxLength={128}
             />
           </Field>
           <div className="flex items-center gap-2">
@@ -204,7 +206,7 @@ export function IndexNowPanel({ owner, siteID }: { owner: boolean; siteID?: stri
       {open?.mode === "submit" && (
         <FormDialog
           title="提交 IndexNow URL"
-          description="每行一个 HTTPS URL。提交会先验证文件及 Host 范围。"
+          description={`每行一个 HTTPS URL，每批最多 ${indexNowMaxURLs} 条。提交会先验证文件及 Host 范围。`}
           submitLabel="提交索引请求"
           onClose={close}
           onSubmit={async (data) => {
@@ -212,6 +214,7 @@ export function IndexNowPanel({ owner, siteID }: { owner: boolean; siteID?: stri
               .split(/\r?\n/)
               .map((value) => value.trim())
               .filter(Boolean);
+            if (urls.length > indexNowMaxURLs) throw new SeoAPIError(400, "execution_submission_limit");
             await seoRequest("/execution/jobs", {
               method: "POST",
               body: {

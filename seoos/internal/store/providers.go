@@ -28,6 +28,9 @@ func (s *Store) SetProviderKey(key []byte) error {
 		return err
 	}
 	s.providerCipher, err = cipher.NewGCMWithRandomNonce(block)
+	if err == nil {
+		s.integrationMatchKey = integrationMigrationHMAC(key, []byte("artex/seoos/integration-migration/v1"))
+	}
 	return err
 }
 

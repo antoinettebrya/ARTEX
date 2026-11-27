@@ -214,6 +214,8 @@ func executionResult(w http.ResponseWriter, status int, value any, err error) {
 		writeError(w, 409, "integration_required", "Select an active integration explicitly.")
 	case errors.Is(err, domain.ErrIntegrationRevoked):
 		writeError(w, 409, "integration_authorization_changed", "The authorization changed or was revoked.")
+	case errors.Is(err, domain.ErrIntegrationBindingConflict):
+		writeError(w, 409, "integration_binding_conflict", "The site already has a binding for this service, or the external resource is assigned to another site.")
 	case errors.Is(err, domain.ErrExecutionUnsupported):
 		writeError(w, 409, "execution_unsupported", "The configured connection does not support this operation.")
 	case errors.Is(err, domain.ErrExecutionState):
@@ -223,6 +225,8 @@ func executionResult(w http.ResponseWriter, status int, value any, err error) {
 	case errors.As(err, &data):
 		if data.Code == "execution_budget" {
 			writeError(w, 429, data.Code, "The request limit has been reached.")
+		} else if data.Code == "execution_submission_limit" {
+			writeError(w, 400, data.Code, "The selected service does not accept this many URLs in one batch.")
 		} else {
 			writeError(w, 502, data.Code, "The provider request was unable to complete.")
 		}

@@ -150,6 +150,8 @@ func operation(req *http.Request, provider string) string {
 		return "gsc_url_inspection"
 	case "www.googleapis.com":
 		switch {
+		case req.URL.Path == "/oauth2/v3/certs":
+			return "oauth_jwks"
 		case strings.HasSuffix(req.URL.Path, "/searchAnalytics/query"):
 			return "gsc_search_analytics"
 		case strings.HasSuffix(req.URL.Path, "/sitemaps"):

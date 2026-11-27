@@ -340,6 +340,9 @@ func (s *Store) BeginExecutionSubmissions(ctx context.Context, lease domain.Leas
 	if len(urls) == 0 {
 		return domain.ErrExecutionAuthority
 	}
+	if len(urls) > domain.IndexingBatchLimit(provider) {
+		return &domain.DataError{Code: "execution_submission_limit"}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

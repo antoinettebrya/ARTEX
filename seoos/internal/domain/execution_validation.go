@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/url"
 	"path"
 	"strconv"
@@ -135,8 +136,7 @@ func (s ExecutionCredential) Validate(in ExecutionConnectionInput) error {
 			return invalidCred
 		}
 	case ExecutionIndexNow:
-		if len(s.Secret) < 8 || len(s.Secret) > 128 ||
-			strings.Trim(s.Secret, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		if !ValidIndexNowKey(s.Secret) {
 			return invalidCred
 		}
 		loc, _ := url.Parse(in.KeyLocation)
@@ -200,8 +200,8 @@ func (in ExecutionJobInput) Validate() error {
 	}
 	needsURL := in.Kind == ExecPDF || in.Kind == ExecBrowser || in.Kind == ExecInspection || in.Kind == ExecIndexNow
 	if len(in.URLs) > 0 {
-		if in.Kind != ExecIndexNow || in.URL != "" || len(in.URLs) > 1000 {
-			return invalid("urls", "provide a batch of up to 1000 HTTPS URLs")
+		if in.Kind != ExecIndexNow || in.URL != "" || len(in.URLs) > IndexingBatchLimit(in.Provider) {
+			return invalid("urls", fmt.Sprintf("provide a batch of up to %d HTTPS URLs", IndexingBatchLimit(in.Provider)))
 		}
 		for _, target := range in.URLs {
 			u, err := EvidenceURL(target)

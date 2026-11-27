@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	gaPropertyID = regexp.MustCompile("^properties/[1-9][0-9]{0,18}$")
-	gaDimensions = []string{"date", "landingPage", "country", "deviceCategory", "language", "hostName"}
-	gaMetrics    = []string{"sessions", "activeUsers", "engagedSessions", "engagementRate", "userEngagementDuration", "keyEvents", "sessionKeyEventRate"}
-	gaMetricKeys = map[string]string{
+	gaPropertyID  = regexp.MustCompile("^properties/[1-9][0-9]{0,18}$")
+	gaWebStreamID = regexp.MustCompile("^[1-9][0-9]{0,18}$")
+	gaDimensions  = []string{"date", "landingPage", "country", "deviceCategory", "language", "hostName"}
+	gaMetrics     = []string{"sessions", "activeUsers", "engagedSessions", "engagementRate", "userEngagementDuration", "keyEvents", "sessionKeyEventRate"}
+	gaMetricKeys  = map[string]string{
 		"sessions": "sessions", "activeUsers": "active_users", "engagedSessions": "engaged_sessions",
 		"engagementRate": "engagement_rate", "userEngagementDuration": "user_engagement_seconds",
 		"keyEvents": "key_events", "sessionKeyEventRate": "session_key_event_rate",
@@ -47,7 +48,7 @@ func (s *report) ga4(from, to string) error {
 	s.output.Quality = quality
 	for offset := 0; ; {
 		var data gaReport
-		query := gaQuery(base, from, to, offset)
+		query := gaQuery(base, from, to, offset, s.config.PropertyWebStreamIDs)
 		if s.config.Managed {
 			query["returnPropertyQuota"] = true
 		}
@@ -147,7 +148,7 @@ func (s *report) gaProperties(selected string) error {
 	}
 }
 
-func gaQuery(base *url.URL, from, to string, offset int) map[string]any {
+func gaQuery(base *url.URL, from, to string, offset int, webStreamIDs []string) map[string]any {
 	dimensions, orders := make([]any, 0, len(gaDimensions)), make([]any, 0, len(gaDimensions))
 	for _, name := range gaDimensions {
 		dimensions = append(dimensions, map[string]string{"name": name})
@@ -163,6 +164,11 @@ func gaQuery(base *url.URL, from, to string, offset int) map[string]any {
 	}
 	if prefix := strings.TrimRight(base.EscapedPath(), "/"); prefix != "" {
 		filters = append(filters, gaStringFilter("landingPage", "FULL_REGEXP", regexp.QuoteMeta(prefix)+"(/.*)?", true))
+	}
+	if len(webStreamIDs) > 0 {
+		filters = append(filters, map[string]any{"filter": map[string]any{
+			"fieldName": "streamId", "inListFilter": map[string]any{"values": webStreamIDs},
+		}})
 	}
 	return map[string]any{
 		"dateRanges":      []map[string]string{{"startDate": from, "endDate": to}},

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -323,11 +324,6 @@ func (s executionScope) submit(ctx context.Context) domain.JobOutcome {
 	if !c.AllowWrites {
 		return s.failure(ctx, domain.ErrExecutionAuthority)
 	}
-	if c.Kind == domain.ExecutionIndexNow {
-		if err := s.checkIndexNowKey(ctx); err != nil {
-			return s.failure(ctx, err)
-		}
-	}
 	targets := in.URLs
 	if len(targets) == 0 {
 		targets = []string{in.URL}
@@ -345,6 +341,11 @@ func (s executionScope) submit(ctx context.Context) domain.JobOutcome {
 	}
 	if err = client.ValidateSubmission(c, secret, targets); err != nil {
 		return s.failure(ctx, err)
+	}
+	if c.Kind == domain.ExecutionIndexNow {
+		if err = s.checkIndexNowKey(ctx); err != nil {
+			return s.failure(ctx, err)
+		}
 	}
 	if err = s.repo.BeginExecutionSubmissions(ctx, s.lease, c.Kind, targets); err != nil {
 		return s.failure(ctx, err)
@@ -414,7 +415,7 @@ func (s executionScope) verifyIndexNowKey(ctx context.Context) error {
 		client = &isolated
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
-	if err != nil {
+	if err != nil || !domain.ValidIndexNowKey(s.secret.Secret) || path.Base(req.URL.Path) != s.secret.Secret+".txt" {
 		return &domain.DataError{Code: "indexnow_ownership_unverified"}
 	}
 	response, err := client.Do(req)

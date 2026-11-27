@@ -144,6 +144,9 @@ func (s *Store) EnqueueExecution(ctx context.Context, org string, in domain.Exec
 	if !executionConnectionKind(in.Kind, connection.Kind) {
 		return empty, false, domain.ErrExecutionUnsupported
 	}
+	if in.Kind == domain.ExecIndexNow && len(in.URLs) > domain.IndexingBatchLimit(connection.Kind) {
+		return empty, false, &domain.DataError{Code: "execution_submission_limit"}
+	}
 	if executionAnalytics(connection.Kind) && (in.Kind == domain.ExecGSCSync || in.Kind == domain.ExecGA4Sync || in.Kind == domain.ExecBingSync) {
 		existing, existingErr := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+`
 			FROM public.seo_jobs WHERE organization_id=$1 AND id=(

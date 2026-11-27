@@ -448,7 +448,7 @@ func TestURLInspectionGoogleVerdicts(t *testing.T) {
 
 func TestIndexNowReceiptScopeAndQuota(t *testing.T) {
 	config := connection(domain.ExecutionIndexNow, "")
-	config.KeyLocation = testSite + "catalog/fixture-key.txt"
+	config.KeyLocation = testSite + "catalog/fixture-indexnow-key.txt"
 	secret := domain.ExecutionCredential{Secret: "fixture-indexnow-key"}
 	var requests atomic.Int32
 	client := localClient(t, func(w http.ResponseWriter, r *http.Request) {

@@ -3,10 +3,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,7 +25,7 @@ import (
 	"github.com/Autumn-27/artex/seoos/internal/worker"
 )
 
-const usage = "Usage: seoos [serve|api|worker|migrate|health|worker-health|provision-org NAME OWNER_EMAIL|integrations migrate-legacy [--dry-run]]"
+const usage = "Usage: seoos [serve|api|worker|migrate|health|worker-health|provision-org NAME OWNER_EMAIL|integrations migrate-legacy [--dry-run|--show-duplicates|--apply-approved]]"
 
 func main() {
 	if err := run(); err != nil {
@@ -49,7 +51,7 @@ func run() error {
 		}
 	case "integrations":
 		if len(os.Args) < 3 || os.Args[2] != "migrate-legacy" || len(os.Args) > 4 ||
-			len(os.Args) == 4 && os.Args[3] != "--dry-run" {
+			len(os.Args) == 4 && os.Args[3] != "--dry-run" && os.Args[3] != "--show-duplicates" && os.Args[3] != "--apply-approved" {
 			return errors.New(usage)
 		}
 	case "provision-org":
@@ -96,9 +98,27 @@ func run() error {
 	}
 	if command == "integrations" {
 		actor := domain.Principal{OrganizationID: cfg.OrganizationID, Role: domain.RoleOwner, Kind: "bootstrap"}
-		results, err := repo.MigrateLegacyIntegrations(domain.WithPrincipal(ctx, actor), cfg.OrganizationID, len(os.Args) == 4)
+		var options store.LegacyIntegrationOptions
+		if len(os.Args) == 4 {
+			options.DryRun = os.Args[3] == "--dry-run"
+			options.DuplicatesOnly = os.Args[3] == "--show-duplicates"
+			if os.Args[3] == "--apply-approved" {
+				if info, statErr := os.Stdin.Stat(); statErr != nil || info.Mode()&os.ModeCharDevice != 0 {
+					return errors.New("pass the reviewed connection and target account pairs as JSON on stdin")
+				}
+				options.Approvals, err = readLegacyApprovals(os.Stdin)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		results, err := repo.ReviewLegacyIntegrations(domain.WithPrincipal(ctx, actor), cfg.OrganizationID, options)
 		if err != nil {
-			return errors.New("cannot migrate the legacy search integrations; prior transactions were preserved")
+			var invalid *domain.ValidationError
+			if errors.As(err, &invalid) {
+				return invalid
+			}
+			return errors.New("cannot migrate the legacy search integrations; no changes were committed")
 		}
 		return json.NewEncoder(os.Stdout).Encode(results)
 	}
@@ -154,6 +174,25 @@ func run() error {
 		}()
 	}
 	return serveHTTP(ctx, repo, cfg, execution.Fixture)
+}
+
+func readLegacyApprovals(source io.Reader) ([]store.LegacyIntegrationApproval, error) {
+	const maxApprovalBytes = 1 << 20
+	raw, err := io.ReadAll(io.LimitReader(source, maxApprovalBytes+1))
+	if err != nil || len(raw) > maxApprovalBytes {
+		return nil, errors.New("cannot read the approved migration pairs within the 1 MiB limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var approvals []store.LegacyIntegrationApproval
+	if err := decoder.Decode(&approvals); err != nil || len(approvals) == 0 {
+		return nil, errors.New("provide a nonempty JSON array of connection_id and target_account_id pairs")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("provide exactly one JSON approval array")
+	}
+	return approvals, nil
 }
 
 func readinessProbe(address string) error {

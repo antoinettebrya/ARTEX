@@ -7,6 +7,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { SeoAPIError } from "@/lib/seo/client";
 import { integrationOAuthResultKey } from "@/lib/seo/google-oauth";
 import { seoRoutes } from "@/lib/seo/routes";
 
@@ -44,6 +45,7 @@ export function SearchIntegrationSettings() {
     if (oauth === "connected") toast.success("外部账户已授权");
     else if (oauth === "cancelled") toast.error("授权已取消");
     else if (oauth === "failed") toast.error("授权未完成，请检查应用回调和账户权限。");
+    else if (oauth.startsWith("integration_oauth_")) toast.error(new SeoAPIError(400, oauth).message);
     update({ [integrationOAuthResultKey]: null }, { replace: true });
   }, [oauth, update]);
   return (

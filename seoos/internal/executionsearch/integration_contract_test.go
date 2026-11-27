@@ -78,6 +78,63 @@ func TestBingIntegrationOAuthRefreshAndBearerDiscovery(t *testing.T) {
 	}
 }
 
+func TestSharedGA4PropertyVerifiesAndReturnsOnlyMatchingWebStreams(t *testing.T) {
+	const property = "properties/54321"
+	client := localClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "analyticsadmin.googleapis.com" || r.Header.Get("Authorization") != "Bearer fixture-google-access" {
+			t.Error("invalid Analytics Admin request authentication")
+		}
+		switch r.URL.Path {
+		case "/v1beta/" + property:
+			response(w, map[string]any{"name": property, "timeZone": "America/New_York"})
+		case "/v1beta/" + property + "/dataStreams":
+			if r.URL.Query().Get("pageToken") == "" {
+				response(w, map[string]any{"nextPageToken": "next", "dataStreams": []any{
+					map[string]any{"name": property + "/dataStreams/101", "webStreamData": map[string]string{"defaultUri": "https://one.example.test"}},
+					map[string]any{"name": property + "/dataStreams/202", "webStreamData": map[string]string{"defaultUri": "https://two.example.test/docs/"}},
+				}})
+				return
+			}
+			response(w, map[string]any{"dataStreams": []any{
+				map[string]any{"name": property + "/dataStreams/203", "webStreamData": map[string]string{"defaultUri": "https://two.example.test/docs/"}},
+				map[string]any{"name": property + "/dataStreams/999", "androidAppStreamData": map[string]string{"packageName": "test.example"}},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	access := domain.IntegrationAccess{
+		Account: domain.IntegrationAccount{Provider: domain.IntegrationGoogle, Mode: domain.IntegrationOAuth,
+			Status: domain.IntegrationConnected, Scopes: []string{domain.GA4ReadScope}},
+		Credential: domain.ExecutionCredential{AccessToken: "fixture-google-access"},
+	}
+	for _, tc := range []struct {
+		base, host string
+		streams    []string
+	}{
+		{"https://one.example.test", "one.example.test", []string{"101"}},
+		{"https://two.example.test/docs/new", "two.example.test", []string{"202", "203"}},
+		{"https://two.example.test/docs-more", "", nil},
+		{"https://two.example.test", "", nil},
+		{"https://other.example.test", "", nil},
+	} {
+		t.Run(tc.base, func(t *testing.T) {
+			result, err := client.VerifyIntegrationResource(t.Context(), access, domain.Site{BaseURL: tc.base}, domain.ExecutionGA4, property)
+			if tc.host == "" {
+				var problem *domain.DataError
+				if !errors.As(err, &problem) || problem.Code != "integration_ga4_stream_scope_mismatch" {
+					t.Fatalf("out-of-scope site accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || result.ID != property || result.TimeZone != "America/New_York" ||
+				!slices.Equal(result.StreamHosts, []string{tc.host}) || !slices.Equal(result.WebStreamIDs, tc.streams) {
+				t.Fatalf("expected one site's verified metadata, got %+v: %v", result, err)
+			}
+		})
+	}
+}
+
 func TestManagedIndexNowReceiptsAndRootScope(t *testing.T) {
 	config := connection(domain.ExecutionIndexNow, "")
 	config.Managed = true

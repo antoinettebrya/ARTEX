@@ -69,6 +69,7 @@ func (s *Store) resolveIntegration(ctx context.Context, db rowQueryer, c *domain
 			return secret, true, err
 		}
 		c.PropertyTimeZone = meta.TimeZone
+		c.PropertyWebStreamIDs = meta.WebStreamIDs
 	}
 	if !decrypt {
 		account, _, err := integrationAccount(ctx, db, c.OrganizationID, accountID, "")
@@ -118,9 +119,23 @@ func putIntegrationProjection(ctx context.Context, tx *sql.Tx, org, id string, c
 		return err
 	}
 	if creating {
-		_, err = tx.ExecContext(ctx, `INSERT INTO public.seo_cms_connections
-			(id,organization_id,site_id,kind,configured_site_url,name,settings) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-			id, org, config.SiteID, config.Kind, config.BaseURL, config.Name, string(raw))
+		// Release the name of a detached projection while keeping its ID,
+		// display settings and history available for existing references.
+		if _, err = tx.ExecContext(ctx, `UPDATE public.seo_cms_connections c SET name='Detached integration '||c.id::text
+			WHERE c.organization_id=$1 AND c.site_id=$2 AND c.name=$3 AND EXISTS (
+			  SELECT 1 FROM public.seo_site_integration_bindings b WHERE
+			  (b.organization_id,b.site_id,b.id)=(c.organization_id,c.site_id,c.id) AND b.deleted_at IS NOT NULL)`,
+			org, config.SiteID, config.Name); err != nil {
+			return err
+		}
+		var inserted string
+		err = tx.QueryRowContext(ctx, `INSERT INTO public.seo_cms_connections
+			(id,organization_id,site_id,kind,configured_site_url,name,settings) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+			ON CONFLICT (organization_id,site_id,name) DO NOTHING RETURNING id::text`,
+			id, org, config.SiteID, config.Kind, config.BaseURL, config.Name, string(raw)).Scan(&inserted)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrConflict
+		}
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE public.seo_cms_connections SET configured_site_url=$4,name=$5,settings=$6::jsonb,
 			version=version+1,updated_at=clock_timestamp() WHERE organization_id=$1 AND site_id=$2 AND id=$3`,
@@ -258,8 +273,8 @@ func (s *Store) SaveIndexNowKey(ctx context.Context, org, id string, in domain.I
 		}
 		key = hex.EncodeToString(random)
 	}
-	if !domain.ValidIndexNowKey(key, false) {
-		return "", integrationInput("key", "use 8–128 hexadecimal characters and dashes")
+	if !domain.ValidIndexNowKey(key) {
+		return "", integrationInput("key", "use 8–128 ASCII letters, digits or hyphens")
 	}
 	location, err := domain.IndexNowLocation(site.BaseURL, dir, key)
 	if err != nil {

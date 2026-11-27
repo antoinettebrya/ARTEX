@@ -149,7 +149,9 @@ func (s *Store) SaveIntegrationApplication(ctx context.Context, org, id string, 
 	return value, tx.Commit()
 }
 
-const integrationAccountData = `to_jsonb(a)-'encrypted_credentials'-'organization_id'`
+const integrationAccountData = `to_jsonb(a)-'encrypted_credentials'-'organization_id'-'verified_subject' ||
+	jsonb_build_object('identity_status',CASE WHEN a.provider='bing' THEN 'UNAVAILABLE'
+	WHEN a.verified_subject IS NOT NULL THEN 'VERIFIED' ELSE 'UNVERIFIED' END)`
 
 func integrationAccount(ctx context.Context, db rowQueryer, org, id, lock string) (domain.IntegrationAccount, []byte, error) {
 	var value domain.IntegrationAccount
@@ -157,8 +159,9 @@ func integrationAccount(ctx context.Context, db rowQueryer, org, id, lock string
 		return value, nil, domain.ErrNotFound
 	}
 	var data, cipher []byte
-	err := db.QueryRowContext(ctx, `SELECT `+integrationAccountData+`,a.encrypted_credentials
-		FROM public.seo_integration_accounts a WHERE a.organization_id=$1 AND a.id=$2 AND a.deleted_at IS NULL`+lock, org, id).Scan(&data, &cipher)
+	err := db.QueryRowContext(ctx, `SELECT `+integrationAccountData+`,a.encrypted_credentials,coalesce(a.verified_subject,'')
+		FROM public.seo_integration_accounts a WHERE a.organization_id=$1 AND a.id=$2 AND a.deleted_at IS NULL`+lock,
+		org, id).Scan(&data, &cipher, &value.VerifiedSubject)
 	if err != nil {
 		return value, nil, classifyError(err)
 	}
@@ -386,6 +389,9 @@ func (s *Store) SaveIntegrationGrant(ctx context.Context, org string, prior doma
 	if current.Account.Version != prior.Account.Version || current.Application.Version != prior.Application.Version {
 		return result, domain.ErrVersionConflict
 	}
+	if err = checkIntegrationSubject(current.Account, secret.ExternalSubject, true); err != nil {
+		return result, err
+	}
 	if err = s.writeIntegrationGrant(ctx, tx, org, id, secret, scopes, true); err != nil {
 		return result, err
 	}
@@ -400,16 +406,35 @@ func (s *Store) SaveIntegrationGrant(ctx context.Context, org string, prior doma
 }
 
 func (s *Store) writeIntegrationGrant(ctx context.Context, tx *sql.Tx, org, id string, secret domain.ExecutionCredential, scopes []string, bump bool) error {
-	secret.ClientID, secret.ClientSecret = "", ""
+	subject := secret.ExternalSubject
+	secret.ClientID, secret.ClientSecret, secret.ExternalSubject = "", "", ""
 	sealed, err := s.sealIntegration("account", org, id, secret)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE public.seo_integration_accounts SET encrypted_credentials=$3,granted_scopes=$4,
 		expires_at=$5,last_refresh_at=clock_timestamp(),authorization_status='CONNECTED',
+		verified_subject=coalesce(nullif($7,''),verified_subject),
+		identity_verified_at=CASE WHEN $7<>'' AND ($6 OR verified_subject IS NULL) THEN clock_timestamp() ELSE identity_verified_at END,
 		credential_version=credential_version+CASE WHEN $6 THEN 1 ELSE 0 END,updated_at=clock_timestamp()
-		WHERE organization_id=$1 AND id=$2`, org, id, sealed, scopes, secret.ExpiresAt, bump)
+		WHERE organization_id=$1 AND id=$2`, org, id, sealed, scopes, secret.ExpiresAt, bump, subject)
 	return err
+}
+
+func checkIntegrationSubject(account domain.IntegrationAccount, subject string, required bool) error {
+	if account.Provider != domain.IntegrationGoogle {
+		if subject != "" {
+			return &domain.DataError{Code: "integration_oauth_invalid_identity"}
+		}
+		return nil
+	}
+	if (required || subject != "") && !domain.ValidIntegrationSubject(subject) {
+		return &domain.DataError{Code: "integration_oauth_invalid_identity"}
+	}
+	if account.VerifiedSubject != "" && subject != "" && subject != account.VerifiedSubject {
+		return &domain.DataError{Code: "integration_oauth_identity_mismatch"}
+	}
+	return nil
 }
 
 func (s *Store) RefreshIntegration(ctx context.Context, org, id string, expected int64, force bool,
@@ -432,9 +457,13 @@ func (s *Store) RefreshIntegration(ctx context.Context, org, id string, expected
 		return access, tx.Commit()
 	}
 	secret, scopes, err := refresh(ctx, access)
+	if err == nil {
+		err = checkIntegrationSubject(a, secret.ExternalSubject, false)
+	}
 	if err != nil {
 		var problem *domain.DataError
-		if errors.As(err, &problem) && (problem.Code == "integration_invalid_grant" || problem.Code == "integration_oauth_scope_required") {
+		if errors.As(err, &problem) && (problem.Code == "integration_invalid_grant" || problem.Code == "integration_oauth_scope_required" ||
+			problem.Code == "integration_oauth_identity_mismatch") {
 			if _, dbErr := tx.ExecContext(ctx, `UPDATE public.seo_integration_accounts SET authorization_status='REAUTH_REQUIRED',encrypted_credentials=NULL,granted_scopes='{}',expires_at=NULL,
 				credential_version=credential_version+1,updated_at=clock_timestamp() WHERE organization_id=$1 AND id=$2`, org, id); dbErr != nil {
 				return access, dbErr

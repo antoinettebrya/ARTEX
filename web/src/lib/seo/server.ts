@@ -242,7 +242,7 @@ export function seoApiOrigin(value: string): string {
   return url.origin;
 }
 
-async function upstream(origin: string, path: string, token: string, method: string, body?: string) {
+async function upstream(origin: string, path: string, token: string, method: string, body?: string, timeout = 12_000) {
   return fetch(`${seoApiOrigin(origin)}/api/v1${path}`, {
     method,
     headers: {
@@ -253,7 +253,7 @@ async function upstream(origin: string, path: string, token: string, method: str
     body,
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(12000),
+    signal: AbortSignal.timeout(timeout),
   });
 }
 
@@ -448,11 +448,28 @@ async function integrationBrowserCallback(request: NextRequest, origin: string, 
   });
   let result = "failed";
   try {
-    const response = await upstream(origin, `/integrations/oauth/callback/${provider}?${payload}`, token, "GET");
+    const response = await upstream(
+      origin,
+      `/integrations/oauth/callback/${provider}?${payload}`,
+      token,
+      "GET",
+      undefined,
+      26_000,
+    );
     if (response.ok) {
       const body = (await response.json()) as { connected?: unknown; cancelled?: unknown };
       if (body.connected === true) result = "connected";
       if (body.cancelled === true) result = "cancelled";
+    } else {
+      const body = (await response.json()) as { error?: { code?: string } };
+      const code = body.error?.code;
+      if (
+        code === "integration_oauth_invalid_identity" ||
+        code === "integration_oauth_identity_mismatch" ||
+        code === "integration_oauth_identity_unverified" ||
+        code === "integration_oauth_scope_required"
+      )
+        result = code;
     }
   } catch {
     // Clear the temporary cookie and return a safe result on transport failures.

@@ -1,12 +1,17 @@
 """Loopback HTTP contracts for Phase 4 search providers and generic CMS."""
 
+from base64 import urlsafe_b64encode
 from collections import Counter
 from datetime import datetime, time, timedelta, timezone
+from hashlib import sha256
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
+from subprocess import run
+from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
-from time import monotonic
+from time import monotonic, time as epoch_time
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 HOST = "phase3.example.com"
@@ -21,7 +26,7 @@ INDEXNOW_RETRY_AFTER = 8
 GA_PROPERTY = "properties/54321"
 CENTER_HOSTS = ("center-one.example.test", "center-two.example.test")
 CENTER_PROPERTIES = ("properties/65431", "properties/65432")
-CENTER_KEYS = ("0123456789abcdef", "fedcba9876543210")
+CENTER_KEYS = ("GZgz0123456789ab", "ZzgG9876543210xy")
 CENTER_LOCATIONS = ("/", "/updates/")
 REPORT_DAY = (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat()
 GOOGLE_CLIENTS = {
@@ -32,7 +37,7 @@ GOOGLE_CLIENTS = {
 GOOGLE_SCOPES = {
     "gsc": "https://www.googleapis.com/auth/webmasters.readonly",
     "ga4": "https://www.googleapis.com/auth/analytics.readonly",
-    "shared": "https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly",
+    "shared": "openid https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly",
 }
 
 SITEMAP_INDEX = (
@@ -57,6 +62,24 @@ def utc_now():
 def bing_date(day):
     stamp = datetime.combine(datetime.fromisoformat(day), time(12), timezone.utc)
     return f"/Date({int(stamp.timestamp()) * 1000}+0000)/"
+
+
+def base64url(value):
+    return urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def fixture_id_token(private_key, client_id, verifier):
+    now = int(epoch_time())
+    nonce = base64url(sha256(("artex-google-oidc-nonce-v1:" + verifier).encode()).digest())
+    header = base64url(json.dumps({"alg": "RS256", "kid": "fixture-google-key"}).encode())
+    claims = base64url(json.dumps({
+        "iss": "https://accounts.google.com", "aud": client_id,
+        "iat": now, "exp": now + 3600, "sub": "fixture-google-subject", "nonce": nonce,
+    }).encode())
+    signing_input = (header + "." + claims).encode()
+    signature = run(["openssl", "dgst", "-sha256", "-sign", str(private_key)],
+                    input=signing_input, check=True, capture_output=True).stdout
+    return signing_input.decode() + "." + base64url(signature)
 
 
 def render_page(page):
@@ -93,6 +116,8 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             if host == "oauth2.googleapis.com":
                 return self.oauth(path)
             if host == "www.googleapis.com":
+                if self.command == "GET" and path == "/oauth2/v3/certs":
+                    return self.respond_json(200, self.server.google_jwks)
                 return self.gsc(path)
             if host == "searchconsole.googleapis.com":
                 return self.inspect_google(path)
@@ -237,10 +262,14 @@ class ExecutionHandler(BaseHTTPRequestHandler):
                     not 43 <= len(params.get("code_verifier", "")) <= 128 or
                     not params.get("redirect_uri", "").startswith("https://")):
                 return self.respond_json(400, {"error": "invalid_grant"})
-            return self.respond_json(200, {
+            response = {
                 "access_token": f"phase4-{kind}-first", "refresh_token": f"phase4-{kind}-refresh",
                 "expires_in": 30, "token_type": "Bearer", "scope": GOOGLE_SCOPES[kind],
-            })
+            }
+            if kind == "shared":
+                response["id_token"] = fixture_id_token(self.server.google_private_key, params["client_id"],
+                                                         params["code_verifier"])
+            return self.respond_json(200, response)
         if grant == "refresh_token" and params.get("refresh_token") == f"phase4-{kind}-refresh":
             return self.respond_json(200, {
                 "access_token": f"phase4-{kind}-access", "expires_in": 3600,
@@ -378,6 +407,7 @@ class ExecutionHandler(BaseHTTPRequestHandler):
                                                   "currencyCode": "USD"})
                 if path == f"/v1beta/{prop}/dataStreams":
                     return self.respond_json(200, {"dataStreams": [{
+                        "name": f"{prop}/dataStreams/{index + 101}",
                         "webStreamData": {"defaultUri": "https://" + CENTER_HOSTS[index]},
                     }]})
         if host == "analyticsdata.googleapis.com" and self.command == "POST":
@@ -388,6 +418,10 @@ class ExecutionHandler(BaseHTTPRequestHandler):
                 filters = json.dumps(data["dimensionFilter"])
                 if not data.get("returnPropertyQuota") or CENTER_HOSTS[index] not in filters or "Organic Search" not in filters:
                     raise ValueError("GA4 data needs hostname, channel, and quota")
+                if not any(item.get("filter") == {
+                        "fieldName": "streamId", "inListFilter": {"values": [str(index + 101)]},
+                } for item in data["dimensionFilter"]["andGroup"]["expressions"]):
+                    raise ValueError("GA4 report used other site's stream")
                 return self.respond_json(200, {
                     "dimensionHeaders": data["dimensions"], "metricHeaders": data["metrics"], "rowCount": 0,
                     "metadata": {"timeZone": "America/New_York",
@@ -440,7 +474,8 @@ class ExecutionHandler(BaseHTTPRequestHandler):
         if data.get("host") in CENTER_HOSTS:
             index = CENTER_HOSTS.index(data["host"])
             origin = "https://" + CENTER_HOSTS[index]
-            if (data.get("key") != CENTER_KEYS[index] or not targets or
+            if (data.get("key") != CENTER_KEYS[index] or not targets or len(targets) > 1000 or
+                    len(targets) != len(set(targets)) or
                     any(not value.startswith(origin + CENTER_LOCATIONS[index]) for value in targets) or
                     data.get("keyLocation") != (origin + CENTER_LOCATIONS[index] + CENTER_KEYS[index] + ".txt" if index else None)):
                 return self.respond_json(422, {"error": "out-of-scope center IndexNow request"})
@@ -509,7 +544,18 @@ class ExecutionHandler(BaseHTTPRequestHandler):
 
 class LocalExecution:
     def __enter__(self):
+        self.key_dir = TemporaryDirectory(prefix="artex-fixture-oidc-")
+        key_path = Path(self.key_dir.name) / "google-fixture.pem"
+        run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(key_path)],
+            check=True, capture_output=True)
+        modulus = run(["openssl", "rsa", "-in", str(key_path), "-noout", "-modulus"],
+                      check=True, capture_output=True).stdout.decode().strip().split("=", 1)[1]
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ExecutionHandler)
+        self.server.google_private_key = key_path
+        self.server.google_jwks = {"keys": [{
+            "kty": "RSA", "alg": "RS256", "kid": "fixture-google-key",
+            "n": base64url(bytes.fromhex(modulus)), "e": "AQAB",
+        }]}
         self.server.lock = Lock()
         self.server.calls = Counter()
         self.server.counters = Counter()
@@ -567,3 +613,4 @@ class LocalExecution:
         self.server.shutdown()
         self.thread.join()
         self.server.server_close()
+        self.key_dir.cleanup()

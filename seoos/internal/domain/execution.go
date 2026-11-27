@@ -93,22 +93,23 @@ type ExecutionCredential struct {
 	ClientSecret    string     `json:"client_secret,omitempty"`
 	RefreshToken    string     `json:"refresh_token,omitempty"`
 	AccessToken     string     `json:"access_token,omitempty"`
-	ExternalSubject string     `json:"external_subject,omitempty"`
+	ExternalSubject string     `json:"-"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 }
 
 type ExecutionConnection struct {
-	IntegrationAccountID    string `json:"integration_account_id,omitempty"`
-	IntegrationVersion      int64  `json:"-"`
-	IntegrationInherited    bool   `json:"-"`
-	IndexNowDirectory       string `json:"-"`
-	IndexNowVerificationURL string `json:"-"`
-	KeyVerified             bool   `json:"-"`
-	Managed                 bool   `json:"managed_integration,omitempty"`
-	LegacyKey               bool   `json:"-"`
-	PropertyTimeZone        string `json:"-"`
-	ID                      string `json:"id"`
-	OrganizationID          string `json:"organization_id"`
+	IntegrationAccountID    string   `json:"integration_account_id,omitempty"`
+	IntegrationVersion      int64    `json:"-"`
+	IntegrationInherited    bool     `json:"-"`
+	IndexNowDirectory       string   `json:"-"`
+	IndexNowVerificationURL string   `json:"-"`
+	KeyVerified             bool     `json:"-"`
+	Managed                 bool     `json:"managed_integration,omitempty"`
+	LegacyKey               bool     `json:"-"`
+	PropertyTimeZone        string   `json:"-"`
+	PropertyWebStreamIDs    []string `json:"-"`
+	ID                      string   `json:"id"`
+	OrganizationID          string   `json:"organization_id"`
 	ExecutionConnectionInput
 	Version      int64           `json:"version"`
 	Configured   bool            `json:"configured"`

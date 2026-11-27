@@ -193,7 +193,7 @@ export function AccountsPanel() {
       </div>
       <RecordsTable
         label="外部账户"
-        columns={["账户", "服务", "权限", "状态", "最后刷新", "站点数", "操作"]}
+        columns={["账户", "服务", "权限", "授权状态", "身份", "最后刷新", "站点数", "操作"]}
         list={list}
         empty="暂无授权账户"
       >
@@ -209,6 +209,18 @@ export function AccountsPanel() {
             </TableCell>
             <TableCell>
               <IntegrationStatus status={account.authorization_status} />
+            </TableCell>
+            <TableCell>
+              {account.provider === "bing" ? (
+                "Bing 未提供稳定 ID"
+              ) : (
+                <IntegrationStatus status={account.identity_status} />
+              )}
+              {account.identity_verified_at && (
+                <div className="text-muted-foreground text-xs">
+                  <TimeValue value={account.identity_verified_at} />
+                </div>
+              )}
             </TableCell>
             <TableCell>
               <TimeValue value={account.last_refresh_at} empty="待刷新" />

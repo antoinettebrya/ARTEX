@@ -28,9 +28,12 @@ func IntegrationAuthorizationURL(access domain.IntegrationAccess, scopes []strin
 	endpoint := bingOAuthURL + "authorize"
 	if app.Provider == domain.IntegrationGoogle {
 		endpoint = googleAuthorizeURL
+		scopes = googleGrantScopes(access, scopes)
+		params.Set("scope", strings.Join(append([]string{domain.IdentityScope}, scopes...), " "))
 		challenge := sha256.Sum256([]byte(verifier))
 		params.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
 		params.Set("code_challenge_method", "S256")
+		params.Set("nonce", googleNonce(verifier))
 		params.Set("access_type", "offline")
 		params.Set("include_granted_scopes", "true")
 		if (access.Account.Status == domain.IntegrationReauth || access.Account.Status == domain.IntegrationRevoked) && access.Credential.RefreshToken == "" {
@@ -40,47 +43,73 @@ func IntegrationAuthorizationURL(access domain.IntegrationAccess, scopes []strin
 	return endpoint + "?" + params.Encode(), nil
 }
 
+func googleGrantScopes(access domain.IntegrationAccess, requested []string) []string {
+	result := slices.Clone(requested)
+	for _, scope := range access.Account.Scopes {
+		if scope != domain.IdentityScope && slices.Contains(access.Application.AllowedScopes, scope) && !slices.Contains(result, scope) {
+			result = append(result, scope)
+		}
+	}
+	return result
+}
+
 func (c *Client) ExchangeIntegration(ctx context.Context, access domain.IntegrationAccess, scopes []string, code, verifier string) (domain.ExecutionCredential, []string, error) {
 	if !validSecret(code) || !unreserved(verifier, 43, 128) {
 		return domain.ExecutionCredential{}, nil, failure("integration_invalid_oauth_code")
 	}
 	params := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {access.Application.RedirectURI}}
-	if access.Account.Provider == domain.IntegrationGoogle {
-		params.Set("code_verifier", verifier)
-	}
-	// A bound account keeps its original identity. Refresh the prior grant and
-	// require proof that it now includes the incrementally requested scopes.
-	// The consent exchange alone could have used a different signed-in user.
-	if access.Credential.RefreshToken != "" {
-		if access.Account.Provider != domain.IntegrationGoogle {
+	if access.Account.Provider != domain.IntegrationGoogle {
+		if access.Credential.RefreshToken != "" {
 			return domain.ExecutionCredential{}, nil, failure("integration_revoke_before_reconnect")
 		}
-		if _, _, err := c.integrationToken(ctx, access, scopes, params, false); err != nil {
+		return c.integrationToken(ctx, access, scopes, params, true, "")
+	}
+	params.Set("code_verifier", verifier)
+	scopes = googleGrantScopes(access, scopes)
+	priorRefresh := access.Credential.RefreshToken
+	grant, granted, err := c.integrationToken(ctx, access, scopes, params, priorRefresh == "", googleNonce(verifier))
+	if err != nil || priorRefresh == "" {
+		return grant, granted, err
+	}
+	if access.Account.VerifiedSubject == "" && grant.RefreshToken != priorRefresh {
+		// A pre-OIDC grant cannot inherit the identity of the account
+		// just chosen in the browser. Prove the original grant first.
+		original, _, err := c.RefreshIntegrationToken(ctx, access)
+		if err != nil {
 			return domain.ExecutionCredential{}, nil, err
 		}
-		for _, scope := range access.Account.Scopes {
-			if !slices.Contains(scopes, scope) {
-				scopes = append(scopes, scope)
-			}
+		if original.ExternalSubject == "" {
+			return domain.ExecutionCredential{}, nil, failure("integration_oauth_identity_unverified")
 		}
-		return c.integrationToken(ctx, access, scopes, url.Values{
-			"grant_type": {"refresh_token"}, "refresh_token": {access.Credential.RefreshToken},
-		}, true)
+		if original.ExternalSubject != grant.ExternalSubject {
+			return domain.ExecutionCredential{}, nil, failure("integration_oauth_identity_mismatch")
+		}
 	}
-	return c.integrationToken(ctx, access, scopes, params, true)
+	access.Account.VerifiedSubject = grant.ExternalSubject
+	if grant.RefreshToken != "" && grant.RefreshToken != priorRefresh {
+		access.Credential.RefreshToken = grant.RefreshToken
+		// Omission of scope on a refresh keeps the permissions from
+		// that token's authorization code exchange.
+		access.Account.Scopes = granted
+	}
+	return c.refreshIntegrationToken(ctx, access, scopes)
 }
 
 func (c *Client) RefreshIntegrationToken(ctx context.Context, access domain.IntegrationAccess) (domain.ExecutionCredential, []string, error) {
+	return c.refreshIntegrationToken(ctx, access, access.Account.Scopes)
+}
+
+func (c *Client) refreshIntegrationToken(ctx context.Context, access domain.IntegrationAccess, scopes []string) (domain.ExecutionCredential, []string, error) {
 	if !validSecret(access.Credential.RefreshToken) {
 		return domain.ExecutionCredential{}, nil, failure("integration_invalid_grant")
 	}
-	return c.integrationToken(ctx, access, access.Account.Scopes, url.Values{
+	return c.integrationToken(ctx, access, scopes, url.Values{
 		"grant_type": {"refresh_token"}, "refresh_token": {access.Credential.RefreshToken},
-	}, true)
+	}, true, "")
 }
 
 func (c *Client) integrationToken(ctx context.Context, access domain.IntegrationAccess, requested []string,
-	params url.Values, requireRefresh bool,
+	params url.Values, requireRefresh bool, nonce string,
 ) (domain.ExecutionCredential, []string, error) {
 	prior := access.Credential
 	if !validSecret(prior.ClientID) || !validSecret(prior.ClientSecret) {
@@ -97,6 +126,7 @@ func (c *Client) integrationToken(ctx context.Context, access domain.Integration
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		TokenType    string `json:"token_type"`
+		IDToken      string `json:"id_token"`
 		Scope        string `json:"scope"`
 		ExpiresIn    int64  `json:"expires_in"`
 	}
@@ -119,26 +149,37 @@ func (c *Client) integrationToken(ctx context.Context, access domain.Integration
 	}
 	selected := make([]string, 0, len(granted))
 	for _, scope := range granted {
-		if slices.Contains(access.Application.AllowedScopes, scope) && !slices.Contains(selected, scope) &&
+		if scope != domain.IdentityScope && slices.Contains(access.Application.AllowedScopes, scope) && !slices.Contains(selected, scope) &&
 			(slices.Contains(requested, scope) || slices.Contains(access.Account.Scopes, scope)) {
 			selected = append(selected, scope)
 		}
 	}
 	for _, scope := range requested {
-		if !slices.Contains(selected, scope) {
+		if scope != domain.IdentityScope && !slices.Contains(selected, scope) {
 			return domain.ExecutionCredential{}, nil, failure("integration_oauth_scope_required")
 		}
 	}
 	refresh := token.RefreshToken
-	if refresh == "" || refreshing && access.Account.Provider == domain.IntegrationGoogle {
+	if refresh == "" && refreshing {
 		refresh = prior.RefreshToken
 	}
 	if requireRefresh && !validSecret(refresh) {
 		return domain.ExecutionCredential{}, nil, failure("integration_refresh_token_required")
 	}
 	expires := time.Now().UTC().Add(time.Duration(token.ExpiresIn) * time.Second)
+	subject := access.Account.VerifiedSubject
+	if access.Account.Provider == domain.IntegrationGoogle && (nonce != "" || token.IDToken != "") {
+		verified, err := c.verifiedGoogleSubject(ctx, token.IDToken, prior.ClientID, nonce, token.AccessToken)
+		if err != nil {
+			return domain.ExecutionCredential{}, nil, err
+		}
+		if subject != "" && subject != verified {
+			return domain.ExecutionCredential{}, nil, failure("integration_oauth_identity_mismatch")
+		}
+		subject = verified
+	}
 	return domain.ExecutionCredential{ClientID: prior.ClientID, ClientSecret: prior.ClientSecret,
-		AccessToken: token.AccessToken, RefreshToken: refresh, ExpiresAt: &expires}, selected, nil
+		AccessToken: token.AccessToken, RefreshToken: refresh, ExpiresAt: &expires, ExternalSubject: subject}, selected, nil
 }
 
 func (c *Client) RevokeGoogleIntegration(ctx context.Context, access domain.IntegrationAccess) error {

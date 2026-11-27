@@ -23,17 +23,22 @@ const (
 	BingWriteScope = "Webmaster.manage"
 	IdentityScope  = "openid"
 
-	IntegrationConnected = "CONNECTED"
-	IntegrationReauth    = "REAUTH_REQUIRED"
-	IntegrationRevoked   = "REVOKED"
+	IntegrationConnected           = "CONNECTED"
+	IntegrationReauth              = "REAUTH_REQUIRED"
+	IntegrationRevoked             = "REVOKED"
+	IntegrationIdentityVerified    = "VERIFIED"
+	IntegrationIdentityUnverified  = "UNVERIFIED"
+	IntegrationIdentityUnavailable = "UNAVAILABLE"
+
+	IndexNowMaxBatchURLs = 1_000
 )
 
 var (
-	ErrIntegrationDependency = errors.New("remove the dependent integration bindings first")
-	ErrIntegrationRequired   = errors.New("select an active search integration")
-	ErrIntegrationRevoked    = errors.New("the integration authorization was revoked or changed")
-	hexIndexNowKey           = regexp.MustCompile(`^[0-9a-fA-F-]{8,128}$`)
-	legacyIndexNowKey        = regexp.MustCompile(`^[A-Za-z0-9-]{8,128}$`)
+	ErrIntegrationDependency      = errors.New("remove the dependent integration bindings first")
+	ErrIntegrationRequired        = errors.New("select an active search integration")
+	ErrIntegrationRevoked         = errors.New("the integration authorization was revoked or changed")
+	ErrIntegrationBindingConflict = errors.New("a site or external search resource already has a binding")
+	indexNowKey                   = regexp.MustCompile(`^[A-Za-z0-9-]{8,128}$`)
 )
 
 type IntegrationApplication struct {
@@ -61,18 +66,21 @@ type IntegrationApplicationInput struct {
 }
 
 type IntegrationAccount struct {
-	ID                string     `json:"id"`
-	ApplicationID     string     `json:"application_id,omitempty"`
-	Provider          string     `json:"provider"`
-	Label             string     `json:"label"`
-	Mode              string     `json:"auth_mode"`
-	Scopes            []string   `json:"granted_scopes"`
-	Version           int64      `json:"credential_version"`
-	Status            string     `json:"authorization_status"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-	LastRefreshAt     *time.Time `json:"last_refresh_at,omitempty"`
-	RequestsPerMinute int        `json:"requests_per_minute"`
-	RequestsPerDay    int        `json:"requests_per_day"`
+	ID                 string     `json:"id"`
+	ApplicationID      string     `json:"application_id,omitempty"`
+	Provider           string     `json:"provider"`
+	Label              string     `json:"label"`
+	Mode               string     `json:"auth_mode"`
+	Scopes             []string   `json:"granted_scopes"`
+	Version            int64      `json:"credential_version"`
+	Status             string     `json:"authorization_status"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	LastRefreshAt      *time.Time `json:"last_refresh_at,omitempty"`
+	RequestsPerMinute  int        `json:"requests_per_minute"`
+	RequestsPerDay     int        `json:"requests_per_day"`
+	IdentityStatus     string     `json:"identity_status"`
+	IdentityVerifiedAt *time.Time `json:"identity_verified_at,omitempty"`
+	VerifiedSubject    string     `json:"-"`
 }
 
 type IntegrationAccountInput struct {
@@ -92,16 +100,17 @@ type IntegrationAccess struct {
 }
 
 type IntegrationResource struct {
-	Kind        string   `json:"provider"`
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	URL         string   `json:"url,omitempty"`
-	Permission  string   `json:"permission,omitempty"`
-	ParentID    string   `json:"parent_id,omitempty"`
-	ParentName  string   `json:"parent_name,omitempty"`
-	TimeZone    string   `json:"time_zone,omitempty"`
-	Currency    string   `json:"currency,omitempty"`
-	StreamHosts []string `json:"stream_hosts,omitempty"`
+	Kind         string   `json:"provider"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	URL          string   `json:"url,omitempty"`
+	Permission   string   `json:"permission,omitempty"`
+	ParentID     string   `json:"parent_id,omitempty"`
+	ParentName   string   `json:"parent_name,omitempty"`
+	TimeZone     string   `json:"time_zone,omitempty"`
+	Currency     string   `json:"currency,omitempty"`
+	StreamHosts  []string `json:"stream_hosts,omitempty"`
+	WebStreamIDs []string `json:"web_stream_ids,omitempty"`
 }
 
 type IntegrationBindingInput struct {
@@ -132,7 +141,12 @@ type IntegrationFilter struct {
 func IntegrationScopes(provider string, values []string) ([]string, error) {
 	var result []string
 	for _, value := range values {
-		if !(provider == IntegrationGoogle && (value == GSCReadScope || value == GA4ReadScope || value == IdentityScope) ||
+		// Older application configurations may include openid. Google
+		// identity is now requested by the OAuth flow automatically.
+		if provider == IntegrationGoogle && value == IdentityScope {
+			continue
+		}
+		if !(provider == IntegrationGoogle && (value == GSCReadScope || value == GA4ReadScope) ||
 			provider == IntegrationBing && (value == BingReadScope || value == BingWriteScope)) {
 			return nil, invalid("scopes", "choose a documented scope for this provider")
 		}
@@ -140,7 +154,7 @@ func IntegrationScopes(provider string, values []string) ([]string, error) {
 			result = append(result, value)
 		}
 	}
-	if len(result) == 0 || len(result) == 1 && result[0] == IdentityScope {
+	if len(result) == 0 {
 		return nil, invalid("scopes", "choose at least one search or analytics permission")
 	}
 	return result, nil
@@ -170,17 +184,23 @@ func ValidIntegrationSecret(value string) bool {
 	return len(value) > 0 && len(value) <= 8192 && !strings.ContainsFunc(value, func(ch rune) bool { return ch < '!' || ch > '~' })
 }
 
+func ValidIntegrationSubject(value string) bool {
+	return len(value) <= 255 && ValidIntegrationSecret(value)
+}
+
 func ValidIntegrationCallback(raw, provider string) bool {
 	u, err := EvidenceURL(raw)
 	return err == nil && u.Scheme == "https" && !u.ForceQuery && u.RawQuery == "" &&
 		u.EscapedPath() == "/seo/api/integrations/oauth/callback/"+provider
 }
 
-func ValidIndexNowKey(value string, legacy bool) bool {
-	if legacy {
-		return legacyIndexNowKey.MatchString(value)
+func ValidIndexNowKey(value string) bool { return indexNowKey.MatchString(value) }
+
+func IndexingBatchLimit(provider string) int {
+	if provider == ExecutionBing {
+		return 500
 	}
-	return hexIndexNowKey.MatchString(value) && strings.Trim(value, "-") != ""
+	return IndexNowMaxBatchURLs
 }
 
 var indexNowDirectory = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)*/?$`)
@@ -205,7 +225,7 @@ func IndexNowLocation(base, directory, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !ValidIndexNowKey(key, true) {
+	if !ValidIndexNowKey(key) {
 		return "", invalid("key", "invalid IndexNow key")
 	}
 	return (&url.URL{Scheme: "https", Host: u.Hostname(), Path: dir + key + ".txt"}).String(), nil

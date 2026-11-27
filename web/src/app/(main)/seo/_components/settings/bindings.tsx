@@ -229,7 +229,7 @@ function BindingEditor({
   return (
     <FormDialog
       title={sites.length === 1 ? "绑定站点资源" : "批量绑定站点资源"}
-      description="发现结果需要逐站确认。保存时会检查站点范围和资源权限。"
+      description="逐站验证范围和资源权限。GSC 和 GA4 资源可在同一组织内绑定多个站点。每个 Bing 站点对应一条绑定。"
       submitLabel="确认绑定"
       onClose={close}
       onSubmit={async (data) => {
@@ -250,7 +250,10 @@ function BindingEditor({
             body: { items },
           });
           const completed = result.items.filter((row) => row.status === "bound").length;
-          toast.info(`已绑定 ${completed} 个站点，${items.length - completed} 个验证未通过。`);
+          const conflicts = result.items.filter((row) => row.status === "conflict").length;
+          toast.info(
+            `已绑定 ${completed} 个站点，${conflicts} 个绑定冲突，${items.length - completed - conflicts} 个验证未通过。`,
+          );
         }
         saved();
       }}

@@ -55,11 +55,7 @@ func (c *Client) ValidateSubmission(config domain.ExecutionConnection, secret do
 	if !config.Enabled || !config.AllowWrites {
 		return domain.ErrExecutionAuthority
 	}
-	limit := 10000
-	if config.Kind == domain.ExecutionBing {
-		limit = 500
-	}
-	if len(urls) == 0 || len(urls) > limit {
+	if len(urls) == 0 || len(urls) > domain.IndexingBatchLimit(config.Kind) {
 		return failure("execution_submission_limit")
 	}
 	base, err := siteURL(config.BaseURL)
@@ -83,12 +79,12 @@ func (c *Client) ValidateSubmission(config domain.ExecutionConnection, secret do
 			}
 		}
 	case domain.ExecutionIndexNow:
-		if !domain.ValidIndexNowKey(secret.Secret, !config.Managed || config.LegacyKey) {
+		if !domain.ValidIndexNowKey(secret.Secret) {
 			return failure("execution_invalid_indexnow_key")
 		}
 		if config.KeyLocation != "" {
 			key, err := siteURL(config.KeyLocation)
-			if err != nil || key.Scheme != base.Scheme || urlHost(key) != urlHost(base) || config.Managed && path.Base(key.Path) != secret.Secret+".txt" {
+			if err != nil || key.Scheme != base.Scheme || urlHost(key) != urlHost(base) || path.Base(key.Path) != secret.Secret+".txt" {
 				return failure("execution_invalid_indexnow_key_location")
 			}
 			key.Path, key.RawPath = path.Dir(key.Path), ""

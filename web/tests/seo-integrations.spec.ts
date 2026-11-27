@@ -11,14 +11,14 @@ const sites = [
     host: "center-one.example.test",
     property: "properties/65431",
     directory: "/",
-    key: "0123456789abcdef",
+    key: "GZgz0123456789ab",
   },
   {
     name: "集成验收站点二",
     host: "center-two.example.test",
     property: "properties/65432",
     directory: "/updates/",
-    key: "fedcba9876543210",
+    key: "ZzgG9876543210xy",
   },
 ];
 
@@ -142,9 +142,11 @@ test("search integrations authorize shared accounts, verify scoped keys and keep
       expect(auth.get("code_challenge_method")).toBe("S256");
       expect(auth.get("access_type")).toBe("offline");
       expect(auth.get("include_granted_scopes")).toBe("true");
+      expect(auth.get("nonce")).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(auth.get("scope")?.split(" ").sort()).toEqual([
         "https://www.googleapis.com/auth/analytics.readonly",
         "https://www.googleapis.com/auth/webmasters.readonly",
+        "openid",
       ]);
       callback.searchParams.set("state", auth.get("state") ?? "");
       callback.searchParams.set("code", "phase4-shared-code");
@@ -164,6 +166,7 @@ test("search integrations authorize shared accounts, verify scoped keys and keep
   expect(redirect.headers().location).toContain("integration_oauth=connected");
   expect(redirect.headers()["referrer-policy"]).toBe("no-referrer");
   await expect(google.getByText("已授权", { exact: true })).toBeVisible();
+  await expect(google.getByText("已验证", { exact: true })).toBeVisible();
   await expect(page).toHaveURL((url) => url.search === "?tab=accounts");
   expect((await page.request.get(callback.href, { maxRedirects: 0 })).status()).toBe(403);
   await page.getByRole("button", { name: "添加外部账户" }).click();
@@ -173,7 +176,8 @@ test("search integrations authorize shared accounts, verify scoped keys and keep
   await addAccount.getByRole("button", { name: "保存账户" }).click();
   await expect(accountTable.getByRole("row").filter({ hasText: "共享 Bing 账户" })).toContainText("已授权");
   const accounts = (await checked(await request.get(`${base}/integrations/accounts`, { headers }))).items;
-  expect(JSON.stringify(accounts)).not.toMatch(/phase4-|encrypted|access_token|refresh_token/);
+  expect(JSON.stringify(accounts)).not.toMatch(/phase4-|encrypted|access_token|refresh_token|fixture-google-subject/);
+  await screenshot(page, "06-external-accounts.png");
 
   await tab(page, "站点资源绑定").click();
   const bindings = page.getByRole("table", { name: "站点资源绑定", exact: true });
@@ -275,10 +279,14 @@ test("search integrations authorize shared accounts, verify scoped keys and keep
     expect(downloaded.status()).toBe(200);
     expect(downloaded.headers()["content-type"]).toContain("text/plain");
     expect(await downloaded.text()).toBe(site.key);
+    const urls = Array.from(
+      { length: site.directory === "/" ? 1_000 : 2 },
+      (_, index) => `https://${site.host}${site.directory}trial-${index}`,
+    );
     const job = await runJob({
       kind: "indexnow_submit",
       site_id: site.id,
-      urls: [`https://${site.host}${site.directory}first`, `https://${site.host}${site.directory}second`],
+      urls,
     });
     const submissions = (
       await checked(await request.get(`${base}/execution/submissions?site_id=${site.id}`, { headers }))
@@ -289,6 +297,27 @@ test("search integrations authorize shared accounts, verify scoped keys and keep
       integration_status: site.directory === "/" ? "ACCEPTED_PENDING_VERIFICATION" : "SUBMITTED",
       requested_at: expect.any(String),
     });
+    if (site.directory === "/") {
+      const tooMany = [...urls, `https://${site.host}/over-limit`];
+      await row.getByRole("button", { name: "提交 URL", exact: true }).click();
+      const batchDialog = page.getByRole("dialog", { name: "提交 IndexNow URL" });
+      await batchDialog.getByLabel("提交 URL").fill(tooMany.join("\n"));
+      await batchDialog.getByRole("button", { name: "提交索引请求" }).click();
+      await expect(batchDialog.getByRole("alert")).toContainText("提交的 URL 数量超出");
+      await batchDialog.getByRole("button", { name: "取消", exact: true }).click();
+      const rejected = await request.post(`${base}/execution/jobs`, {
+        headers,
+        data: {
+          idempotency_key: crypto.randomUUID(),
+          kind: "indexnow_submit",
+          site_id: site.id,
+          urls: tooMany,
+        },
+      });
+      expect(rejected.status()).toBe(400);
+      const repeated = await runJob({ kind: "indexnow_submit", site_id: site.id, urls: [urls[0]] }, "failed");
+      expect(repeated.error_code).toBe("execution_indexing_recently_submitted");
+    }
   }
   await screenshot(page, "03-indexnow-verified.png");
   await tab(page, "同步与健康监控").click();
