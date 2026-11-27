@@ -553,7 +553,7 @@ test("SEO navigation preserves scoped pages and renders API metrics on desktop a
 
   const requestNewSite = page.waitForRequest((request) => {
     const url = new URL(request.url());
-    return url.pathname === "/seo/api/execution/connections" && url.searchParams.get("site_id") === paused.id;
+    return url.pathname === "/seo/api/dashboard" && url.searchParams.get("site_id") === paused.id;
   });
   await selector.selectOption(paused.id);
   await requestNewSite;

@@ -118,7 +118,7 @@ func (h *handler) serveExecution(w http.ResponseWriter, r *http.Request, actor d
 		return true
 	}
 	switch path {
-	case "connections", "packages", "publications", "jobs", "pages", "media", "properties", "metrics", "index", "sitemaps", "extractions", "usage", "feedback", "submissions":
+	case "connections", "packages", "publications", "jobs", "pages", "media", "properties", "metrics", "snapshots", "index", "sitemaps", "extractions", "usage", "feedback", "submissions":
 		if path == "usage" && actor.Role != domain.RoleOwner {
 			forbidden(w)
 			return true

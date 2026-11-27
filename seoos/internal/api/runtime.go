@@ -129,9 +129,14 @@ func (h *handler) testProvider(w http.ResponseWriter, r *http.Request, principal
 func (h *handler) jobsCollection(w http.ResponseWriter, r *http.Request, principal domain.Principal) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		limit, offset, ok := readPage(w, r)
+		limit, offset, ok := readPage(w, r, "site_id", "site_country", "site_language", "state", "kind", "day")
 		if ok {
-			jobs, err := h.jobs.ListJobs(r.Context(), principal.OrganizationID, limit, offset)
+			q := r.URL.Query()
+			filter := domain.JobFilter{
+				SiteScope: domain.SiteScope{SiteID: q.Get("site_id"), Country: q.Get("site_country"), Language: q.Get("site_language")},
+				State:     q.Get("state"), Kind: q.Get("kind"), Day: q.Get("day"),
+			}
+			jobs, err := h.jobs.ListJobs(r.Context(), principal.OrganizationID, limit, offset, filter)
 			writeRuntimeResult(w, http.StatusOK, map[string]any{"jobs": jobs}, err)
 		}
 	case http.MethodPost:

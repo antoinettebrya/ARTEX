@@ -14,6 +14,8 @@ import (
 )
 
 type ExecutionResult struct {
+	GSC *domain.GSCProgress
+
 	Info       *domain.CMSSiteInfo
 	Pages      []domain.CMSPage
 	Media      []domain.CMSMedia
@@ -118,6 +120,16 @@ func (s *Store) SaveExecutionResult(ctx context.Context, lease domain.Lease, wor
 	if result.Sync != nil {
 		summary["rows"] = len(result.Sync.Metrics)
 		summary["truncated"] = result.Sync.Truncated
+	}
+	if result.GSC != nil {
+		summary["gsc_progress"] = result.GSC
+		summary["rows"] = result.GSC.Rows
+		summary["truncated"] = result.GSC.Truncated > 0 || result.Sync != nil && result.Sync.Truncated
+		if result.GSC.Complete > 0 && result.GSC.Truncated == 0 && result.GSC.Failed == 0 {
+			if err := updateExecutionFeedback(ctx, tx, c, true); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if result.Sitemap != nil {
 		summary["sitemap_urls"] = len(result.Sitemap.Entries)
@@ -257,8 +269,14 @@ func (s *Store) ExecutionSyncDates(ctx context.Context, c domain.ExecutionConnec
 	}
 	if from.IsZero() {
 		var latest sql.NullTime
-		err = s.db.QueryRowContext(ctx, `SELECT max(day) FROM public.seo_`+c.Kind+`_daily_metrics
-			WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3`, c.OrganizationID, c.SiteID, c.ID).Scan(&latest)
+		if c.Kind == domain.ExecutionGSC {
+			err = s.db.QueryRowContext(ctx, `SELECT max(day) FROM public.seo_gsc_daily_snapshots
+				WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3 AND connection_version=$4 AND state='complete'`,
+				c.OrganizationID, c.SiteID, c.ID, c.Version).Scan(&latest)
+		} else {
+			err = s.db.QueryRowContext(ctx, `SELECT max(day) FROM public.seo_`+c.Kind+`_daily_metrics
+				WHERE organization_id=$1 AND site_id=$2 AND connection_id=$3`, c.OrganizationID, c.SiteID, c.ID).Scan(&latest)
+		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return "", "", err
 		}

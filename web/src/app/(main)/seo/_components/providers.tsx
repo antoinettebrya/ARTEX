@@ -376,9 +376,22 @@ function ModelCapabilities({ kind, options }: { kind: Exclude<ProviderKind, "dat
           </>
         )}
         {kind === "anthropic" && (
-          <Field id="model-workspace" label="Claude Workspace ID（选填）">
-            <Input id="model-workspace" name="workspace_id" defaultValue={options?.workspace_id} maxLength={120} />
-          </Field>
+          <>
+            <Field id="model-claude-protocol" label="接口协议">
+              <NativeSelect
+                id="model-claude-protocol"
+                name="protocol"
+                defaultValue={options?.protocol ?? ""}
+                className="w-full"
+              >
+                <NativeSelectOption value="">OpenAI 兼容</NativeSelectOption>
+                <NativeSelectOption value="anthropic_messages">Claude Messages</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field id="model-workspace" label="Claude Workspace ID（选填）">
+              <Input id="model-workspace" name="workspace_id" defaultValue={options?.workspace_id} maxLength={120} />
+            </Field>
+          </>
         )}
         <Field id="model-temperature" label="Temperature">
           <NativeSelect

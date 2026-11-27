@@ -48,7 +48,7 @@ func (a openAI) intent(ctx context.Context, evidence domain.KeywordEvidence, mar
 	if !validIntent(answer.Secondary) || answer.Secondary == answer.Primary {
 		answer.Secondary = ""
 	}
-	answer.Sources = []string{"openai:" + brief.Model, "response:" + brief.ResponseID}
+	answer.Sources = []string{call.Provider.Kind + ":" + brief.Model, "response:" + brief.ResponseID}
 	outcome := encodedResult(answer)
 	outcome.Diagnostic = result.Diagnostic
 	return &answer, outcome

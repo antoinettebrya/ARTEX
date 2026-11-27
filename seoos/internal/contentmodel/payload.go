@@ -24,18 +24,27 @@ func endpoint(kind string) string {
 	return ""
 }
 
-func route(provider domain.Provider) (target, protocol string) {
+type modelAdapter struct {
+	endpoint string
+	protocol string
+	decode   func([]byte) (parsedOutput, error)
+}
+
+func adapterFor(provider domain.Provider) modelAdapter {
 	if provider.Kind == domain.ProviderCompatible {
 		options := provider.Options()
 		if options.Protocol == domain.ModelResponses {
-			return options.BaseURL + "/responses", domain.ModelResponses
+			return modelAdapter{options.BaseURL + "/responses", domain.ModelResponses, parseResponses}
 		}
-		return options.BaseURL + "/chat/completions", domain.ModelChat
+		return modelAdapter{options.BaseURL + "/chat/completions", domain.ModelChat, parseChat}
 	}
 	if provider.Kind == domain.ProviderOpenAI {
-		return endpoint(provider.Kind), domain.ModelResponses
+		return modelAdapter{endpoint(provider.Kind), domain.ModelResponses, parseResponses}
 	}
-	return endpoint(provider.Kind), domain.ModelChat
+	if provider.Kind == domain.ProviderAnthropic && provider.Options().Protocol == domain.ModelAnthropic {
+		return modelAdapter{"https://api.anthropic.com/v1/messages", domain.ModelAnthropic, parseAnthropic}
+	}
+	return modelAdapter{endpoint(provider.Kind), domain.ModelChat, parseChat}
 }
 
 type modelMessage struct {
@@ -52,7 +61,7 @@ type modelInput struct {
 func buildPayload(req domain.ContentModelRequest, call domain.ContentModelReservation) ([]byte, error) {
 	p := call.Provider
 	options := p.Options()
-	_, protocol := route(p)
+	protocol := adapterFor(p).protocol
 	input, err := json.Marshal(modelInput{Stage: req.Stage, Language: req.Language, Data: req.Input})
 	if err != nil {
 		return nil, err
@@ -71,6 +80,10 @@ func buildPayload(req domain.ContentModelRequest, call domain.ContentModelReserv
 		params["max_output_tokens"] = p.MaxOutputTokens
 		params["instructions"] = system
 		params["input"] = string(input)
+	} else if protocol == domain.ModelAnthropic {
+		params["max_tokens"] = p.MaxOutputTokens
+		params["system"] = system
+		params["messages"] = []modelMessage{{Role: "user", Content: string(input)}}
 	} else {
 		tokenField := options.TokenField
 		if tokenField == "" {
@@ -82,19 +95,19 @@ func buildPayload(req domain.ContentModelRequest, call domain.ContentModelReserv
 	if includeTemperature(p) && (p.Kind != domain.ProviderAnthropic || call.Profile.Temperature <= 1) {
 		params["temperature"] = call.Profile.Temperature
 	}
-	if options.Reasoning != "" {
+	if effort := reasoningEffort(p); effort != "" {
 		switch {
 		case protocol == domain.ModelResponses:
-			params["reasoning"] = map[string]string{"effort": options.Reasoning}
+			params["reasoning"] = map[string]string{"effort": effort}
 		case p.Kind == domain.ProviderDeepSeek:
-			if options.Reasoning == "none" {
+			if effort == "none" {
 				params["thinking"] = map[string]string{"type": "disabled"}
 			} else {
 				params["thinking"] = map[string]string{"type": "enabled"}
-				params["reasoning_effort"] = options.Reasoning
+				params["reasoning_effort"] = effort
 			}
 		default:
-			params["reasoning_effort"] = options.Reasoning
+			params["reasoning_effort"] = effort
 		}
 	}
 	if format != domain.ModelText {
@@ -109,6 +122,18 @@ func baseModel(model string) string {
 		name, _, _ = strings.Cut(original, ":")
 	}
 	return name
+}
+
+func reasoningEffort(p domain.Provider) string {
+	effort := p.Options().Reasoning
+	name := baseModel(p.Model)
+	// Gemini Pro and newer generations always reason. Existing saved "none"
+	// configurations use the upstream default instead of producing HTTP 400.
+	if p.Kind == domain.ProviderGemini && effort == "none" &&
+		!strings.HasPrefix(name, "gemini-2.5-flash") {
+		return ""
+	}
+	return effort
 }
 
 func includeTemperature(p domain.Provider) bool {
@@ -173,6 +198,12 @@ func outputFormat(p domain.Provider, stage string) string {
 }
 
 func applyFormat(params map[string]any, protocol, format, stage string) {
+	if protocol == domain.ModelAnthropic {
+		if format == domain.ModelSchema {
+			params["output_config"] = map[string]any{"format": map[string]any{"type": format, "schema": schemaFor(stage)}}
+		}
+		return
+	}
 	wire := map[string]any{"type": format}
 	if format == domain.ModelSchema {
 		schema := map[string]any{"name": "artex_" + stage, "strict": true, "schema": schemaFor(stage)}

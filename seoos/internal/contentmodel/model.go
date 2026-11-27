@@ -58,7 +58,8 @@ func (c *Client) Generate(ctx context.Context, req domain.ContentModelRequest, c
 		out.Diagnostic = diagnostic
 		out.ReceiptID = call.ID
 	}()
-	target, protocol := route(provider)
+	adapter := adapterFor(provider)
+	target := adapter.endpoint
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		diagnostic.Category = "timeout"
 		return out, fail("content_model_timeout", true, true)
@@ -139,12 +140,7 @@ func (c *Client) Generate(ctx context.Context, req domain.ContentModelRequest, c
 		diagnostic.Category = "response"
 		return out, fail("content_model_response_limit", false, false)
 	}
-	var parsed parsedOutput
-	if protocol == domain.ModelResponses {
-		parsed, err = parseResponses(raw)
-	} else {
-		parsed, err = parseChat(raw)
-	}
+	parsed, err := adapter.decode(raw)
 	if err != nil {
 		diagnostic.Category = "response"
 		if bytes.Contains(raw, []byte(call.APIKey)) {

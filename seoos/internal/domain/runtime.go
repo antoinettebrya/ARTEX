@@ -73,13 +73,14 @@ type Job struct {
 	AvailableAt time.Time       `json:"available_at"`
 	ErrorCode   string          `json:"error_code,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
+	GSCProgress *GSCProgress    `json:"gsc_progress,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type JobRepository interface {
 	EnqueueJob(context.Context, string, JobInput) (Job, bool, error)
-	ListJobs(context.Context, string, int, int) ([]Job, error)
+	ListJobs(context.Context, string, int, int, ...JobFilter) ([]Job, error)
 	GetJob(context.Context, string, string) (Job, error)
 	CancelJob(context.Context, string, string) (Job, error)
 }
@@ -234,6 +235,7 @@ type ProviderTestResult struct {
 }
 
 type ProviderCall struct {
+	ID             string
 	Provider       Provider
 	APIKey         string
 	Pricing        *ContentModelProfile
@@ -241,4 +243,17 @@ type ProviderCall struct {
 	ReservedTokens int64
 	ReservedMicros int64
 	DeferUntil     time.Time
+}
+
+func (c ProviderCall) ModelReservation() ContentModelReservation {
+	provider := c.Provider
+	var profile ContentModelProfile
+	if c.Pricing == nil {
+		settings := provider.Options()
+		settings.Temperature = "off"
+		provider.ModelOptions = &settings
+	} else {
+		profile = *c.Pricing
+	}
+	return ContentModelReservation{ID: c.ID, Provider: provider, Profile: profile, APIKey: c.APIKey}
 }

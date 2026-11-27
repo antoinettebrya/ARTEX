@@ -9,6 +9,7 @@ import { ArrowRight, CloudDownload, FileText, RefreshCw, Search, Send, Upload } 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { TableCell, TableRow } from "@/components/ui/table";
 import type { Site } from "@/lib/seo/client";
 import {
@@ -102,6 +103,19 @@ function metricValue(number: number | undefined, format: "percent" | "seconds" |
   return format === "seconds" ? `${formatted} 秒` : formatted;
 }
 
+type DailySearchSnapshot = {
+  provider: "gsc";
+  date: string;
+  connection_id: string;
+  state: "pending" | "complete" | "truncated" | "failed";
+  rows: number;
+  error_code?: string;
+  observed_at: string;
+  totals: { clicks?: number; impressions?: number } | null;
+};
+
+const snapshotStates = { pending: "待处理", complete: "采集完成", truncated: "明细截断", failed: "采集失败" };
+
 export function AnalyticsPanel({
   kind,
   site,
@@ -116,6 +130,11 @@ export function AnalyticsPanel({
   const filters = { kind, connection_id: connection?.id };
   const metrics = useExecutionRecords<ExecutionMetric>("metrics", site.id, revision, { ...filters, ...range });
   const properties = useExecutionRecords<ExecutionProperty>("properties", site.id, revision, filters);
+  const snapshots = useExecutionRecords<DailySearchSnapshot>("snapshots", kind === "gsc" ? site.id : "", revision, {
+    connection_id: connection?.id,
+    from: range.from,
+    to: range.to,
+  });
   const fields = metricFields[kind];
   const grain = {
     gsc: ["页面", "搜索词", "国家", "设备"],
@@ -141,6 +160,7 @@ export function AnalyticsPanel({
           reload={() => {
             metrics.refresh();
             properties.refresh();
+            if (kind === "gsc") snapshots.refresh();
           }}
           disabled={metrics.refreshing}
         >
@@ -193,7 +213,34 @@ export function AnalyticsPanel({
         </CardContent>
       </Card>
       {kind === "gsc" && (
-        <p className="text-muted-foreground text-xs">平均排名采用 Search Console 报告中的展示位置平均值。</p>
+        <>
+          <p className="text-muted-foreground text-xs">
+            按 Search Console 日期显示站点总量和明细采集状态。页面与国家筛选仅适用于明细表。
+          </p>
+          <RecordsTable
+            label="Search Console 每日快照"
+            columns={["日期", "明细状态", "点击", "展示", "明细行数", "来源与采集时间（UTC）"]}
+            empty="暂无每日快照"
+            list={snapshots}
+          >
+            {snapshots.records.map((row) => (
+              <TableRow key={`${row.connection_id}:${row.date}`}>
+                <TableCell className="px-3">{row.date}</TableCell>
+                <TableCell className="px-3">
+                  <StateBadge
+                    label={snapshotStates[row.state]}
+                    tone={row.state === "failed" ? "destructive" : "outline"}
+                  />
+                  {row.error_code && <p className="break-all text-muted-foreground text-xs">{row.error_code}</p>}
+                </TableCell>
+                <TableCell className="px-3">{row.totals?.clicks ?? "未知"}</TableCell>
+                <TableCell className="px-3">{row.totals?.impressions ?? "未知"}</TableCell>
+                <TableCell className="px-3">{row.rows}</TableCell>
+                <TableCell className="px-3">GSC · {formatTime(row.observed_at)}</TableCell>
+              </TableRow>
+            ))}
+          </RecordsTable>
+        </>
       )}
       <RecordsTable
         label={searchTitles[kind]}
@@ -346,7 +393,8 @@ export function IndexPanel({ site, connections, writable, onTask, revision }: Pa
     (item) => item.enabled && item.configured && (item.kind === "gsc" || item.kind === "bing"),
   );
   const inspect = useSelectedConnection(inspectors);
-  const list = useExecutionRecords<IndexRecord>("index", site.id, revision);
+  const [source, setSource] = useState("");
+  const list = useExecutionRecords<IndexRecord>("index", site.id, revision, { kind: source || undefined });
   return (
     <div className="grid gap-3">
       <PanelTitle title="索引记录">
@@ -354,26 +402,37 @@ export function IndexPanel({ site, connections, writable, onTask, revision }: Pa
           刷新记录
         </Reload>
       </PanelTitle>
-      {writable && (
-        <FilterBar>
-          <ConnectionSelect
-            id="execution-inspection-connection"
-            label="URL 检查连接"
-            connections={inspectors}
-            value={inspect.connection?.id ?? ""}
-            onChange={inspect.setSelected}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!inspect.connection}
-            onClick={() => onTask({ kind: "url_inspection", connection: inspect.connection })}
-          >
-            <Search /> 检查 URL
-          </Button>
-        </FilterBar>
-      )}
+      <FilterBar>
+        <Field id="index-data-source" label="索引来源">
+          <NativeSelect id="index-data-source" value={source} onChange={(event) => setSource(event.target.value)}>
+            <NativeSelectOption value="">全部来源</NativeSelectOption>
+            <NativeSelectOption value="gsc">Google URL 检查</NativeSelectOption>
+            <NativeSelectOption value="bing">Bing Webmaster</NativeSelectOption>
+            <NativeSelectOption value="sitemap">站点地图</NativeSelectOption>
+            <NativeSelectOption value="indexnow">IndexNow</NativeSelectOption>
+          </NativeSelect>
+        </Field>
+        {writable && (
+          <>
+            <ConnectionSelect
+              id="execution-inspection-connection"
+              label="URL 检查连接"
+              connections={inspectors}
+              value={inspect.connection?.id ?? ""}
+              onChange={inspect.setSelected}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!inspect.connection}
+              onClick={() => onTask({ kind: "url_inspection", connection: inspect.connection })}
+            >
+              <Search /> 检查 URL
+            </Button>
+          </>
+        )}
+      </FilterBar>
       <RecordsTable
         label="索引状态"
         columns={["URL", "状态", "来源和证据", "观测时间（UTC）", "最近抓取（UTC）"]}

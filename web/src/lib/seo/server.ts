@@ -28,6 +28,7 @@ const executionLists = new Set([
   "/execution/media",
   "/execution/properties",
   "/execution/metrics",
+  "/execution/snapshots",
   "/execution/index",
   "/execution/submissions",
   "/execution/sitemaps",
@@ -79,6 +80,7 @@ function permits(path: string, method: string): boolean {
         executionPublicationPath.test(path) ||
         executionSitemapPath.test(path) ||
         path === "/me" ||
+        path === "/dashboard" ||
         path === "/audit" ||
         path === "/providers/receipts" ||
         providerReconcilePath.test(path) ||

@@ -10,7 +10,7 @@ export function useExecutionRecords<T>(
   revision: number,
   filters?: Record<string, string | undefined>,
 ) {
-  const list = useSeoRecords<T>(executionPath(name, site, filters), "items");
+  const list = useSeoRecords<T>(site ? executionPath(name, site, filters) : null, "items");
   const previous = useRef(revision);
   const { refresh } = list;
   useEffect(() => {

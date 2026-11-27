@@ -31,16 +31,7 @@ func siteBriefRequest(site domain.Site) (domain.ContentModelRequest, error) {
 }
 
 func (a openAI) complete(ctx context.Context, request domain.ContentModelRequest, call domain.ProviderCall) domain.JobOutcome {
-	options := call.Provider.Options()
-	if options.Temperature == "" {
-		options.Temperature = "off"
-	}
-	call.Provider.ModelOptions = &options
-	reservation := domain.ContentModelReservation{Provider: call.Provider, APIKey: call.APIKey}
-	if call.Pricing != nil {
-		reservation.Profile.Temperature = call.Pricing.Temperature
-	}
-	response, err := a.models.Generate(ctx, request, reservation)
+	response, err := a.models.Generate(ctx, request, call.ModelReservation())
 	if err != nil {
 		outcome := domain.JobOutcome{Code: err.Code, Retry: err.KnownUnbilled && err.Retry, Diagnostic: &response.Diagnostic}
 		if err.RetryAfter > 0 {

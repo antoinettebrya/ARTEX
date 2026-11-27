@@ -8,20 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { TableCell, TableRow } from "@/components/ui/table";
-import type { Job, Site } from "@/lib/seo/client";
+import type { Job } from "@/lib/seo/client";
 import { type DashboardView, seoRoutes } from "@/lib/seo/routes";
 
-import { SiteSelector, useSeoLocation, useSiteScope } from "./context";
-import {
-  latestJobBySite,
-  loadContentProgress,
-  loadDailyAI,
-  loadDailyJobs,
-  loadIndexStatus,
-  loadPublished,
-  loadSearchReports,
-  utcDay,
-} from "./dashboard-data";
+import { SiteSelector, siteScopeParams, useSeoLocation, useSiteScope } from "./context";
+import { latestJobBySite, loadContentProgress, loadDailyJobs, utcDay } from "./dashboard-data";
 import { jobNames, jobStates, jobTones } from "./jobs";
 import { useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
@@ -38,7 +29,7 @@ import {
 import { siteStates } from "./sites";
 
 const descriptions = {
-  overview: "查看组织运营指标和当前站点的内容、发布与搜索数据。",
+  overview: "查看当前站点范围内的任务、内容、发布与搜索表现，以及组织的 AI 使用量。",
   health: "查看站点登记状态与最近 200 条队列任务中各站的最新结果。",
   inbox: "处理今日失败任务和当前站点通过质量检查后待人工审核的文章。",
   activity: "在当前范围内查看最近 200 条组织任务中的活动。",
@@ -121,352 +112,227 @@ function useRangeJobs(scope: ReturnType<typeof useSiteScope>) {
   };
 }
 
-function PortfolioMetrics({ scope }: { scope: ReturnType<typeof useSiteScope> }) {
-  const jobs = useRangeJobs(scope);
+type SourceIndex = { observed: number; indexed: number; not_indexed: number; pending: number };
+type DailyUsage = {
+  calls: number | null;
+  metered: number | null;
+  tokens: number | null;
+  cost_micros: number | null;
+  unknown: number | null;
+  budget_ratio: number | null;
+};
+type DashboardData = {
+  date_utc: string;
+  from: string;
+  to: string;
+  sites: { total: number; active: number; observed: number; failed: number; cms_observed: number; cms_failed: number };
+  jobs: { executed: number; succeeded: number; failed: number };
+  content: { total: number; generation: number; produced: number; pending: number; published: number };
+  gsc: {
+    connected_sites: number;
+    covered_days: number;
+    truncated_days: number;
+    failed_days: number;
+    pending_days: number;
+    clicks: number | null;
+    impressions: number | null;
+    ctr: number | null;
+    position: number | null;
+    observed_at: string | null;
+  };
+  ga4: { connected_sites: number; covered_days: number; sessions: number | null; observed_at: string | null };
+  index: Record<string, SourceIndex>;
+  ai: { model: DailyUsage; data: DailyUsage } | null;
+};
+
+function Overview() {
+  const scope = useSiteScope();
+  const { principal } = useSeoSession();
   const { href } = useSeoLocation();
-  const outcomes = latestJobBySite(jobs.recent, undefined, true);
-  const cms = latestJobBySite(jobs.recent, "cms_connection_test", true);
-  const failed = jobs.today.filter(({ state }) => state === "failed").length;
-  const succeeded = jobs.today.filter(({ state }) => state === "succeeded").length;
-  const outcomesDetail = outcomes.size
-    ? `最近 200 条组织任务覆盖 ${outcomes.size}/${scope.rows.length} 站`
-    : "暂无已完成任务观测";
-  const cmsDetail = cms.size ? `最近 CMS 验证覆盖 ${cms.size}/${scope.rows.length} 站` : "暂无 CMS 验证观测";
-  const dayDetail = jobs.data?.complete === false ? "UTC 今日 · 部分任务记录" : "UTC 今日创建";
-  const hasSites = !scope.loading && scope.error === undefined;
-  const hasJobs = !jobs.loading && jobs.error === undefined && jobs.data !== undefined;
+  const params = siteScopeParams(scope);
+  const dashboard = useSeoQuery<DashboardData>(params ? `/dashboard?${params}` : null);
+  const data = dashboard.data;
+  const terminal = data ? data.jobs.failed + data.jobs.succeeded : 0;
+  const gscCoverage = data
+    ? `GSC · ${data.gsc.covered_days}/${data.gsc.connected_sites * 28} 站点日 · 明细截断 ${data.gsc.truncated_days} · 失败 ${data.gsc.failed_days} · 待处理 ${data.gsc.pending_days}`
+    : undefined;
 
   return (
-    <section className="grid gap-3" aria-label="组织指标">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">站群状态</h2>
-          <p className="text-muted-foreground text-sm">{utcDay()} UTC · 当前站点范围</p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            scope.refresh();
-            jobs.refresh();
-          }}
-          disabled={jobs.loading}
-        >
-          <RefreshCw /> 刷新站群状态
+    <>
+      <ScopedSelection scope={scope} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {data && (
+          <p className="text-muted-foreground text-sm">
+            {data.from} 至 {data.to} · 搜索观测 · UTC 任务日 {data.date_utc}
+          </p>
+        )}
+        <Button size="sm" variant="outline" onClick={dashboard.refresh} disabled={dashboard.loading}>
+          <RefreshCw /> 刷新运营指标
         </Button>
       </div>
-      {jobs.error !== undefined && (
-        <LoadError
-          error={jobs.error}
-          retry={() => {
-            scope.refresh();
-            jobs.refresh();
-          }}
-        />
+      {dashboard.error !== undefined && <LoadError error={dashboard.error} retry={dashboard.refresh} />}
+      {dashboard.loading && <PageSkeleton />}
+      {data && (
+        <>
+          <section className="grid gap-3" aria-label="组织指标">
+            <h2 className="font-semibold">站群状态</h2>
+            <MetricGrid
+              label="组织运营指标"
+              metrics={[
+                { label: "网站总数", value: data.sites.total },
+                { label: "活跃网站", value: data.sites.active },
+                {
+                  label: "异常网站",
+                  value: data.sites.observed ? data.sites.failed : undefined,
+                  detail: `有任务观测的站点 ${data.sites.observed}`,
+                },
+                {
+                  label: "CMS 连接失败",
+                  value: data.sites.cms_observed ? data.sites.cms_failed : undefined,
+                  detail: `有连接验证的站点 ${data.sites.cms_observed}`,
+                },
+                { label: "今日执行任务", value: data.jobs.executed, detail: "UTC 今日创建且已尝试执行" },
+                { label: "任务成功率", value: terminal ? percent.format(data.jobs.succeeded / terminal) : undefined },
+                { label: "失败任务", value: data.jobs.failed },
+              ]}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.dashboard.health.path)}>
+                  站群健康 <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.dashboard.inbox.path)}>
+                  待处理事项 <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.dashboard.activity.path)}>
+                  最近活动 <ArrowRight />
+                </Link>
+              </Button>
+            </div>
+          </section>
+          <section className="grid gap-3" aria-label="SEO 表现">
+            <h2 className="font-semibold">SEO 表现</h2>
+            <MetricGrid
+              label="站点搜索指标"
+              metrics={[
+                {
+                  label: "GSC 点击",
+                  value: data.gsc.clicks ?? (data.gsc.connected_sites ? "未知" : "未连接"),
+                  detail: gscCoverage,
+                },
+                {
+                  label: "GSC 展示",
+                  value: data.gsc.impressions ?? (data.gsc.connected_sites ? "未知" : "未连接"),
+                  detail: gscCoverage,
+                },
+                {
+                  label: "GSC 点击率",
+                  value: data.gsc.ctr === null ? undefined : percent.format(data.gsc.ctr),
+                  detail: gscCoverage,
+                },
+                {
+                  label: "GSC 平均排名",
+                  value: data.gsc.position === null ? undefined : decimal.format(data.gsc.position),
+                  detail: gscCoverage,
+                },
+                {
+                  label: "自然搜索流量",
+                  value: data.ga4.sessions ?? (data.ga4.connected_sites ? "未知" : "未连接"),
+                  detail: `GA4 · ${data.ga4.covered_days} 个站点日`,
+                },
+                { label: "已索引 URL", value: data.index.gsc?.indexed, detail: "仅 Google URL 检查" },
+                { label: "未索引 URL", value: data.index.gsc?.not_indexed, detail: "仅 Google URL 检查" },
+                { label: "待核实索引", value: data.index.gsc?.pending, detail: "仅 Google URL 检查" },
+                { label: "必应已索引 URL", value: data.index.bing?.indexed, detail: "Bing 独立观测" },
+                { label: "Sitemap 已发现 URL", value: data.index.sitemap?.observed, detail: "站点地图发现记录" },
+                { label: "IndexNow 已观测 URL", value: data.index.indexnow?.observed, detail: "提交回执" },
+              ]}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.execution.gsc.path)}>
+                  谷歌搜索数据 <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.execution.index.path)}>
+                  索引管理 <ArrowRight />
+                </Link>
+              </Button>
+            </div>
+          </section>
+          <section className="grid gap-3" aria-label="内容运营">
+            <h2 className="font-semibold">内容运营</h2>
+            <MetricGrid
+              label="站点运营指标"
+              metrics={[
+                { label: "内容项目", value: data.content.total },
+                { label: "待生成文章", value: data.content.generation },
+                { label: "内容生产数量", value: data.content.produced },
+                { label: "待审核文章", value: data.content.pending },
+                { label: "已发布文章", value: data.content.published, detail: "已发布或核验的 CMS 内容，按目标去重" },
+              ]}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.content.overview.path)}>
+                  内容项目 <ArrowRight />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={href(seoRoutes.execution.publishing.path)}>
+                  发布中心 <ArrowRight />
+                </Link>
+              </Button>
+            </div>
+          </section>
+          {principal.role === "owner" && data.ai && <AIMetrics model={data.ai.model} research={data.ai.data} />}
+        </>
       )}
-      {jobs.loading ? (
-        <PageSkeleton />
-      ) : (
-        <MetricGrid
-          label="组织运营指标"
-          metrics={[
-            {
-              label: "网站总数",
-              value: hasSites ? scope.rows.length : undefined,
-              detail: scope.complete === false ? "仅已读取的站点" : "当前登记范围",
-            },
-            {
-              label: "活跃网站",
-              value: hasSites ? scope.rows.filter(({ status }) => status === "active").length : undefined,
-              detail: "按登记状态",
-            },
-            {
-              label: "异常网站",
-              value:
-                hasJobs && outcomes.size
-                  ? [...outcomes.values()].filter(({ state }) => state === "failed").length
-                  : undefined,
-              detail: outcomesDetail,
-            },
-            {
-              label: "CMS 连接失败",
-              value:
-                hasJobs && cms.size ? [...cms.values()].filter(({ state }) => state === "failed").length : undefined,
-              detail: cmsDetail,
-            },
-            {
-              label: "今日执行任务",
-              value: hasJobs ? jobs.today.filter(({ attempts }) => attempts > 0).length : undefined,
-              detail: `${dayDetail}且已尝试执行`,
-            },
-            {
-              label: "任务成功率",
-              value: hasJobs && failed + succeeded > 0 ? percent.format(succeeded / (failed + succeeded)) : undefined,
-              detail: `${dayDetail}，仅成功与失败任务`,
-            },
-            { label: "失败任务", value: hasJobs ? failed : undefined, detail: dayDetail },
-          ]}
-        />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.dashboard.health.path)}>
-            站群健康 <ArrowRight />
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.dashboard.inbox.path)}>
-            待处理事项 <ArrowRight />
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.dashboard.activity.path)}>
-            最近活动 <ArrowRight />
-          </Link>
-        </Button>
-      </div>
-    </section>
+    </>
   );
 }
 
-function SearchMetrics({ site }: { site: Site }) {
-  const reports = useSeoQuery(site.id, loadSearchReports);
-  const index = useSeoQuery(site.id, loadIndexStatus);
+function AIMetrics({ model, research }: { model: DailyUsage; research: DailyUsage }) {
   const { href } = useSeoLocation();
-  const report = reports.data;
-  const gsc = report?.gsc;
-  const ga4 = report?.ga4;
-  const missing = report?.connectionsComplete === false ? "连接列表覆盖不完整" : "未连接";
-  const detail = (source?: { source: string; days: number; complete: boolean }) =>
-    source ? `${source.source} · ${source.days}/28 天${source.complete ? "" : " · 部分明细"}` : undefined;
-  const scope = index.data?.observed
-    ? `${index.data.observed} 个已观测 URL${index.data.complete ? "" : " · 部分记录"}`
-    : "暂无索引观测";
-  const waiting = reports.loading || index.loading;
-  const gscEmpty = gsc ? "待同步" : missing;
-  const gaEmpty = ga4 ? "待同步" : missing;
-  function searchValue(value: Metric["value"], empty: string) {
-    return value ?? (report ? empty : undefined);
-  }
-  return (
-    <section className="grid gap-3" aria-label="SEO 表现">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">SEO 表现</h2>
-          {report && (
-            <p className="text-muted-foreground text-sm">
-              {report.from} 至 {report.to} · 已同步明细
-            </p>
-          )}
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            reports.refresh();
-            index.refresh();
-          }}
-          disabled={waiting}
-        >
-          <RefreshCw /> 刷新搜索与索引
-        </Button>
-      </div>
-      {reports.error !== undefined && <LoadError error={reports.error} retry={reports.refresh} />}
-      {index.error !== undefined && <LoadError error={index.error} retry={index.refresh} />}
-      {waiting ? (
-        <PageSkeleton />
-      ) : (
-        <MetricGrid
-          label="站点搜索指标"
-          metrics={[
-            { label: "GSC 点击", value: searchValue(gsc?.clicks, gscEmpty), detail: detail(gsc) },
-            { label: "GSC 展示", value: searchValue(gsc?.impressions, gscEmpty), detail: detail(gsc) },
-            {
-              label: "GSC 点击率",
-              value: searchValue(
-                gsc?.ctr === undefined ? undefined : percent.format(gsc.ctr),
-                gsc?.days ? "暂无有效展示" : gscEmpty,
-              ),
-              detail: detail(gsc),
-            },
-            {
-              label: "GSC 平均排名",
-              value: searchValue(
-                gsc?.position === undefined ? undefined : decimal.format(gsc.position),
-                gsc?.days ? "暂无有效排名" : gscEmpty,
-              ),
-              detail: detail(gsc),
-            },
-            { label: "自然搜索流量", value: searchValue(ga4?.sessions, gaEmpty), detail: detail(ga4) },
-            { label: "已索引 URL", value: index.data?.observed ? index.data.indexed : undefined, detail: scope },
-            { label: "未索引 URL", value: index.data?.observed ? index.data.notIndexed : undefined, detail: scope },
-            { label: "待核实索引", value: index.data?.observed ? index.data.pending : undefined, detail: scope },
-          ]}
-        />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.execution.gsc.path)}>
-            谷歌搜索数据 <ArrowRight />
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.execution.index.path)}>
-            索引管理 <ArrowRight />
-          </Link>
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-function ContentMetrics({ site }: { site: Site }) {
-  const progress = useSeoQuery(site.id, loadContentProgress);
-  const published = useSeoQuery(site.id, loadPublished);
-  const { href } = useSeoLocation();
-  const pending = progress.loading || published.loading;
-  const coverage =
-    progress.data?.complete === false ? `覆盖最近 ${progress.data.reviewedProjects} 个项目` : "本站内容项目";
-  return (
-    <section className="grid gap-3" aria-label="内容运营">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <h2 className="font-semibold">内容运营</h2>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={pending}
-          onClick={() => {
-            progress.refresh();
-            published.refresh();
-          }}
-        >
-          <RefreshCw /> 刷新内容指标
-        </Button>
-      </div>
-      {progress.error !== undefined && <LoadError error={progress.error} retry={progress.refresh} />}
-      {published.error !== undefined && <LoadError error={published.error} retry={published.refresh} />}
-      {pending ? (
-        <PageSkeleton />
-      ) : (
-        <MetricGrid
-          label="站点运营指标"
-          metrics={[
-            {
-              label: "内容项目",
-              value: progress.data?.total,
-              detail: progress.data?.totalComplete === false ? "仅已读取的项目" : "本站全部项目",
-            },
-            { label: "待生成文章", value: progress.data?.generation, detail: coverage },
-            { label: "内容生产数量", value: progress.data?.count, detail: coverage },
-            { label: "待审核文章", value: progress.data?.pending.length, detail: coverage },
-            {
-              label: "已发布文章",
-              value: published.data?.count,
-              detail: published.data?.complete === false ? "仅已读取的发布记录" : "已发布或核验的 CMS 内容，按目标去重",
-            },
-          ]}
-        />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.content.overview.path)}>
-            内容项目 <ArrowRight />
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={href(seoRoutes.execution.publishing.path)}>
-            发布中心 <ArrowRight />
-          </Link>
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-function AIMetrics() {
-  const ai = useSeoQuery(utcDay(), loadDailyAI);
-  const { href } = useSeoLocation();
-  const { model, data } = ai.data ?? {};
-  function money(summary?: { amount?: number; unknown: number }) {
-    return summary?.amount === undefined ? undefined : usd.format(summary.amount);
-  }
+  const money = (amount: number | null) => (amount === null ? undefined : usd.format(amount / 1_000_000));
   return (
     <section className="grid gap-3" aria-label="AI 运营">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">AI 运营</h2>
-          <p className="text-muted-foreground text-sm">
-            组织范围 · UTC 今日{ai.data?.complete === false ? " · 部分回执" : ""}
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={ai.refresh} disabled={ai.loading}>
-          <RefreshCw /> 刷新 AI 指标
-        </Button>
+      <div>
+        <h2 className="font-semibold">AI 运营</h2>
+        <p className="text-muted-foreground text-sm">组织范围 · UTC 今日</p>
       </div>
-      {ai.error !== undefined && <LoadError error={ai.error} retry={ai.refresh} />}
-      {ai.loading ? (
-        <PageSkeleton />
-      ) : (
-        <MetricGrid
-          label="AI 运营指标"
-          metrics={[
-            { label: "模型调用量", value: model?.count, detail: "已记录回执，排除测试和纯预留" },
-            {
-              label: "Token 使用量",
-              value: model?.tokens,
-              detail: model ? `${model.tokenCoverage}/${model.count} 条调用有完整 Token` : undefined,
-            },
-            {
-              label: "模型费用",
-              value: money(model),
-              detail: model ? `含估算 · ${model.unknown} 笔待确认` : undefined,
-            },
-            { label: "DataForSEO 费用", value: money(data), detail: data ? `${data.unknown} 笔待确认` : undefined },
-            {
-              label: "模型每日预算使用率",
-              value: ai.data?.modelBudget === undefined ? undefined : budgetPercent.format(ai.data.modelBudget),
-              detail: "内容模型费用与预留 ÷ 已设美元预算",
-            },
-            {
-              label: "数据每日预算使用率",
-              value: ai.data?.dataBudget === undefined ? undefined : budgetPercent.format(ai.data.dataBudget),
-              detail:
-                ai.data?.budgetComplete === false
-                  ? "仅已读取的 DataForSEO 预算"
-                  : "DataForSEO 费用与预留 ÷ 已设美元预算",
-            },
-          ]}
-        />
-      )}
+      <MetricGrid
+        label="AI 运营指标"
+        metrics={[
+          { label: "模型调用量", value: model.calls ?? undefined, detail: "已记录回执" },
+          {
+            label: "Token 使用量",
+            value: model.tokens ?? undefined,
+            detail: `${model.metered ?? 0} 条调用有完整 Token`,
+          },
+          { label: "模型费用", value: money(model.cost_micros), detail: `含估算 · ${model.unknown ?? 0} 笔待确认` },
+          { label: "DataForSEO 费用", value: money(research.cost_micros), detail: `${research.unknown ?? 0} 笔待确认` },
+          {
+            label: "模型每日预算使用率",
+            value: model.budget_ratio === null ? undefined : budgetPercent.format(model.budget_ratio),
+          },
+          {
+            label: "数据每日预算使用率",
+            value: research.budget_ratio === null ? undefined : budgetPercent.format(research.budget_ratio),
+          },
+        ]}
+      />
       <Button asChild variant="outline" size="sm" className="justify-self-start">
         <Link href={href(seoRoutes.system.providers.path)}>
           大模型服务商与请求诊断 <ArrowRight />
         </Link>
       </Button>
     </section>
-  );
-}
-
-function Overview() {
-  const scope = useSiteScope();
-  const { principal } = useSeoSession();
-  return (
-    <>
-      <ScopedSelection scope={scope} />
-      <PortfolioMetrics scope={scope} />
-      {scope.site ? (
-        <>
-          <SearchMetrics site={scope.site} />
-          <ContentMetrics site={scope.site} />
-        </>
-      ) : (
-        scope.rows.length > 0 &&
-        !scope.error && (
-          <p className="text-muted-foreground text-sm">选择单个站点可查看该站点的 SEO 表现与内容运营数据。</p>
-        )
-      )}
-      {principal.role === "owner" && <AIMetrics />}
-    </>
   );
 }
 

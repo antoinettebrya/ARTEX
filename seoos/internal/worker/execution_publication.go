@@ -91,6 +91,9 @@ func (s executionScope) createDraft(ctx context.Context, c domain.CMSConnector, 
 		if hasReleaseMarker(p, r.ID) && p.Status == "draft" && sameReleaseContent(p, payload) {
 			return s.completePublication(ctx, domain.PublicationDraft, "", &p, nil)
 		}
+		if s.work.StartedWrite {
+			return s.completePublication(ctx, domain.PublicationRollback, "cms_draft_receipt_conflict", &p, nil)
+		}
 		return s.publicationProblem(ctx, &domain.DataError{Code: "cms_slug_collision", KnownUnbilled: true})
 	}
 	if s.work.StartedWrite {
@@ -351,7 +354,14 @@ func (s executionScope) publicationProblem(ctx context.Context, err error) domai
 		return out
 	}
 	status := domain.PublicationFailed
-	if s.work.Input.Kind == domain.ExecVerify || s.work.StartedWrite || s.work.Input.Operation == "rollback" {
+	switch {
+	case s.work.Input.Kind == domain.ExecVerify || s.work.StartedWrite:
+		status = domain.PublicationRollback
+	case s.work.Input.Operation == "publish" && s.work.PriorStatus == domain.PublicationDraft:
+		// A failed preflight or definitively rejected write keeps the existing
+		// draft usable. A new attempt still requires fresh owner authorization.
+		status = domain.PublicationDraft
+	case s.work.Input.Operation == "rollback":
 		status = domain.PublicationRollback
 	}
 	return s.completePublication(ctx, status, out.Code, nil, nil)

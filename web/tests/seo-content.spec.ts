@@ -296,6 +296,13 @@ test("content studio produces an evidenced, versioned and separately approved CM
   await expect(page.getByLabel("章节 1 正文", { exact: true })).toBeVisible();
   expect((await fetchWorkspace()).article.sections.length).toBeGreaterThan(1);
   await page.getByLabel("作者", { exact: true }).fill("ARTEX Editorial Desk");
+  await expect(page.getByRole("status").filter({ hasText: "文章有未保存的修改" })).toBeVisible();
+  await openContent("内容简报");
+  await openContent("文章编辑");
+  await expect(page.getByLabel("作者", { exact: true })).toHaveValue("ARTEX Editorial Desk");
+  page.once("dialog", (event) => event.accept());
+  await page.reload();
+  await expect(page.getByLabel("作者", { exact: true })).toHaveValue("ARTEX Editorial Desk");
   await page.getByRole("button", { name: "保存文章版本", exact: true }).click();
   await expect.poll(async () => (await fetchWorkspace()).article.author).toBe("ARTEX Editorial Desk");
   await runStage("优化文章 SEO");

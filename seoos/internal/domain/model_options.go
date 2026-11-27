@@ -9,6 +9,7 @@ import (
 
 const (
 	ModelResponses = "responses"
+	ModelAnthropic = "anthropic_messages"
 	ModelChat      = "chat"
 	ModelText      = "text"
 	ModelJSON      = "json_object"
@@ -73,7 +74,8 @@ func (in ModelOptions) normalize(kind string) (ModelOptions, error) {
 		if in.TokenField != "" && (in.Protocol != ModelChat || in.TokenField != "max_completion_tokens" && in.TokenField != "max_tokens") {
 			return in, invalid("token_field", "choose a Chat Completions output token parameter")
 		}
-	} else if in.BaseURL != "" || in.Protocol != "" || in.AuthHeader != "" || in.AuthMode != "" || in.TokenField != "" {
+	} else if in.BaseURL != "" || in.Protocol != "" && !(kind == ProviderAnthropic && in.Protocol == ModelAnthropic) ||
+		in.AuthHeader != "" || in.AuthMode != "" || in.TokenField != "" {
 		return in, invalid("base_url", "custom routing and authentication require an OpenAI-compatible provider")
 	}
 	if in.WorkspaceID != "" && (kind != ProviderAnthropic || !strings.HasPrefix(in.WorkspaceID, "wrkspc_") ||
@@ -138,6 +140,11 @@ func (p Provider) ModelAuthorization(header http.Header, key string) {
 	settings := p.Options()
 	if p.Kind == ProviderAnthropic && settings.WorkspaceID != "" {
 		header.Set("Anthropic-Workspace-Id", settings.WorkspaceID)
+	}
+	if p.Kind == ProviderAnthropic && settings.Protocol == ModelAnthropic {
+		header.Set("X-Api-Key", key)
+		header.Set("Anthropic-Version", "2023-06-01")
+		return
 	}
 	if p.Kind == ProviderCompatible && settings.AuthHeader != "" {
 		if settings.AuthMode == "bearer" {

@@ -33,6 +33,10 @@ type executionRuntime interface {
 	ExecutionSubmissionFailure(context.Context, domain.Lease, string, string, int, string, bool) error
 	SaveExecutionTokens(context.Context, domain.ExecutionConnection, domain.ExecutionCredential) error
 	ExecutionSyncDates(context.Context, domain.ExecutionConnection, domain.ExecutionJobInput) (string, string, error)
+	StartGSCDays(context.Context, domain.Lease, domain.ExecutionConnection, string, string) error
+	NextGSCDay(context.Context, string, string) (*domain.GSCCursor, error)
+	GSCProgress(context.Context, string, string) (domain.GSCProgress, error)
+	SaveGSCPage(context.Context, domain.Lease, domain.ExecutionWork, domain.GSCCursor, []domain.ExecutionMetric) error
 	SaveExecutionResult(context.Context, domain.Lease, domain.ExecutionWork, store.ExecutionResult) (json.RawMessage, error)
 	CrawlPolicy(context.Context, string, string) (*domain.CrawlPolicy, error)
 	ExecutionRelease(context.Context, domain.Lease, domain.ExecutionWork) (domain.ExecutionRelease, error)
@@ -120,6 +124,9 @@ func (s executionScope) execute(ctx context.Context) domain.JobOutcome {
 		}
 		out, err = s.extract(ctx)
 	case domain.ExecGSCSync, domain.ExecGA4Sync, domain.ExecBingSync, domain.ExecConnectionTest:
+		if in.Kind == domain.ExecGSCSync && c.Property != "" {
+			return s.syncGSCDays(ctx)
+		}
 		if in.Kind == domain.ExecConnectionTest && c.Kind == domain.ExecutionIndexNow {
 			if err = s.verifyIndexNowKey(ctx); err == nil {
 				out.Info = &domain.CMSSiteInfo{Name: c.Name, URL: c.BaseURL}

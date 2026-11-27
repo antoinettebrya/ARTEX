@@ -190,14 +190,14 @@ function SiteProjects({
   const { href } = useSeoLocation();
   const path = `/content/projects?site_id=${site.id}`;
   const overview = view === "overview";
-  const list = useSeoRecords<ContentProject>(overview ? path : null, "items");
-  const selector = useSeoQuery<{ items: ContentProject[] }>(overview ? null : `${path}&limit=200`);
+  const list = useSeoRecords<ContentProject>(overview || !preferredProject ? path : null, "items");
+  const selector = useSeoQuery<{ items: ContentProject[] }>(overview || !preferredProject ? null : `${path}&limit=200`);
   const records = selector.data?.items ?? [];
-  const selectedProject = preferredProject ?? records[0]?.id;
+  const selectedProject = preferredProject;
 
   return (
     <>
-      {overview ? (
+      {overview || !selectedProject ? (
         <RecordsTable
           label="内容项目列表"
           columns={["主关键词", "市场", "状态", "最近更新（UTC）"]}
@@ -208,7 +208,7 @@ function SiteProjects({
             <TableRow key={item.id}>
               <TableCell className="max-w-72 whitespace-normal break-words px-3 py-2">
                 <Link
-                  href={href(seoRoutes.content.project.path, {
+                  href={href(seoRoutes.content[overview ? "project" : view].path, {
                     site_id: site.id,
                     project_id: item.id,
                     keyword: item.keyword,
@@ -230,13 +230,7 @@ function SiteProjects({
           ))}
         </RecordsTable>
       ) : (
-        <>
-          {selector.error !== undefined && <LoadError error={selector.error} retry={selector.refresh} />}
-          {!selectedProject && selector.loading && <PageSkeleton />}
-          {!selectedProject && !selector.loading && !selector.error && (
-            <EmptyContent title="暂无内容项目" detail="为已有研究证据创建项目后，可在此选择项目。" />
-          )}
-        </>
+        selector.error !== undefined && <LoadError error={selector.error} retry={selector.refresh} />
       )}
       {!overview && selectedProject && (
         <ProjectWorkspace
@@ -281,13 +275,18 @@ function ProjectWorkspace({
   const [publication, setPublication] = useState(false);
   const [restore, setRestore] = useState<ContentVersion>();
   const [taskRevision, setTaskRevision] = useState(0);
-  const loaded = query.data?.workspace.project.site_id === site.id ? query.data.workspace : undefined;
+  const loaded =
+    query.data?.workspace.project.site_id === site.id && query.data.workspace.project.id === projectID
+      ? query.data.workspace
+      : undefined;
   const workspace = updated && updated.project.revision >= (loaded?.project.revision ?? 0) ? updated : loaded;
   const current = workspace?.project;
   const options = current && !records.some(({ id }) => id === current.id) ? [current, ...records] : records;
 
   async function save(action: ContentAction) {
-    if (!workspace) return;
+    if (!workspace || workspace.project.id !== projectID || workspace.project.site_id !== site.id) {
+      throw new Error("当前项目已切换，请重新加载后保存。");
+    }
     const { workspace: result } = await seoRequest<{ workspace: ContentWorkspace }>(
       `/content/projects/${workspace.project.id}/actions`,
       {
@@ -446,6 +445,9 @@ function ProjectWorkspace({
                   <ArticleEditor
                     key={`${workspace.project.id}/${workspace.article_version}`}
                     article={workspace.article}
+                    articleVersion={workspace.article_version}
+                    siteId={site.id}
+                    projectId={workspace.project.id}
                     onSave={save}
                   />
                 ) : (

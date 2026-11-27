@@ -238,6 +238,14 @@ func (s *Store) MarkExecutionWrite(ctx context.Context, lease domain.Lease, work
 				return err
 			}
 		}
+		target := r.TargetID
+		if work.Input.Operation == "draft" {
+			target = r.RemoteID
+		}
+		if target != "" && !restorablePublicationSnapshot(before, target, r.Resource) ||
+			target == "" && work.Input.Operation != "draft" {
+			return &domain.DataError{Code: "cms_backup_precondition_failed", KnownUnbilled: true}
+		}
 		if before != nil {
 			if err = recordExecutionVersion(ctx, s, tx, job, r.ID, "before", *before); err != nil {
 				return err
@@ -260,6 +268,20 @@ func (s *Store) MarkExecutionWrite(ctx context.Context, lease domain.Lease, work
 		return err
 	}
 	return tx.Commit()
+}
+
+func restorablePublicationSnapshot(page *domain.CMSPage, target, resource string) bool {
+	if page == nil || page.ID != target || page.Resource != resource || page.Slug == "" {
+		return false
+	}
+	switch page.Status {
+	case "publish", "draft", "pending", "private":
+		return true
+	case "future":
+		return page.ScheduledAt != nil
+	default:
+		return false
+	}
 }
 
 func (s *Store) ClearExecutionWrite(ctx context.Context, lease domain.Lease) error {
@@ -438,6 +460,9 @@ func executionPublicationAllowed(status string, in domain.ExecutionJobInput) boo
 }
 
 func executionAbandoned(ctx context.Context, tx *sql.Tx, job domain.Job, reason, action string) error {
+	if job.Kind == domain.ExecGSCSync {
+		return abandonGSCDays(ctx, tx, job, reason)
+	}
 	if !domain.IsExecutionKind(job.Kind) {
 		return nil
 	}

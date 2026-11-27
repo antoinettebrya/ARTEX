@@ -16,12 +16,13 @@ import { executionJobLabels } from "@/lib/seo/execution";
 import { researchJobLabels } from "@/lib/seo/research";
 import { seoRoutes } from "@/lib/seo/routes";
 
-import { useSeoLocation, useSiteScope } from "./context";
-import { readSeoPages, useSeoQuery } from "./query";
+import { siteScopeParams, useSeoLocation, useSiteScope } from "./context";
+import { useSeoQuery } from "./query";
 import { useSeoSession } from "./session";
 import {
   ConfirmChange,
   Field,
+  FilterBar,
   FormDialog,
   field,
   formatTime,
@@ -31,8 +32,7 @@ import {
   RecordDetails,
   RecordsTable,
   StateBadge,
-  useLocalSeoRecords,
-  useSeoList,
+  useSeoRecords,
 } from "./shared";
 
 export const jobNames = {
@@ -121,10 +121,6 @@ function JobEditor({
   );
 }
 
-function loadScopedJobs(path: string, signal: AbortSignal) {
-  return readSeoPages<Job>(path.split("?", 1)[0], "jobs", signal);
-}
-
 export function Jobs() {
   const { principal } = useSeoSession();
   const writable = principal.role !== "viewer";
@@ -134,15 +130,13 @@ export function Jobs() {
   const selectedJob = params.get("job");
   const details = useSeoQuery<{ job: Job }>(isID(selectedJob) ? `/jobs/${selectedJob}` : null);
   const providers = useSeoQuery<{ providers: Provider[] }>(editing ? "/providers?limit=200" : null);
-  const directory = useSeoList<Job>("jobs", !scope.restricted);
-  const scoped = useSeoQuery(scope.restricted ? `/jobs?${scope.key}` : null, loadScopedJobs);
+  const filters = siteScopeParams(scope);
+  const state = params.get("job_state") ?? "";
+  const kind = params.get("job_kind") ?? "";
+  if (state) filters?.set("state", state);
+  if (kind) filters?.set("kind", kind);
+  const list = useSeoRecords<Job>(filters ? `/jobs?${filters}` : null, "jobs");
   const siteIDs = new Set(scope.rows.map(({ id }) => id));
-  const filtered = useLocalSeoRecords(
-    scoped.data?.rows.filter(({ site_id }) => siteIDs.has(site_id)) ?? [],
-    scope.key,
-    { ...scoped, error: scoped.error ?? scope.error, loading: scoped.loading || scope.loading },
-  );
-  const list = scope.restricted ? filtered : directory;
   const [result, setResult] = useState<Job>();
   const [cancel, setCancel] = useState<Job>();
 
@@ -168,9 +162,36 @@ export function Jobs() {
       }
     >
       {editing && providers.loading && <PageSkeleton />}
-      {scope.restricted && scoped.data?.complete === false && (
-        <p className="text-muted-foreground text-sm">当前筛选覆盖最近 2,000 条组织任务。</p>
-      )}
+      <FilterBar>
+        <Field id="jobs-state" label="任务状态">
+          <NativeSelect
+            id="jobs-state"
+            value={state}
+            onChange={(event) => update({ job_state: event.target.value || null })}
+          >
+            <NativeSelectOption value="">全部状态</NativeSelectOption>
+            {Object.entries(jobStates).map(([value, label]) => (
+              <NativeSelectOption key={value} value={value}>
+                {label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </Field>
+        <Field id="jobs-kind" label="任务类型筛选">
+          <NativeSelect
+            id="jobs-kind"
+            value={kind}
+            onChange={(event) => update({ job_kind: event.target.value || null })}
+          >
+            <NativeSelectOption value="">全部类型</NativeSelectOption>
+            {Object.entries(jobNames).map(([value, label]) => (
+              <NativeSelectOption key={value} value={value}>
+                {label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </Field>
+      </FilterBar>
       {editing && providers.error !== undefined && <LoadError error={providers.error} retry={providers.refresh} />}
       {details.loading && <PageSkeleton />}
       {details.error !== undefined && <LoadError error={details.error} retry={details.refresh} />}
@@ -182,6 +203,7 @@ export function Jobs() {
             attempts: details.data.job.attempts,
             error: details.data.job.error_code,
             result: details.data.job.result,
+            gsc_progress: details.data.job.gsc_progress,
           }}
           onClose={() => update({ job: null }, { replace: true })}
         />
@@ -228,9 +250,7 @@ export function Jobs() {
         <JobEditor
           key={site}
           site={scope.site}
-          providers={providers.data.providers.filter(
-            (provider) => provider.enabled && (provider.kind ?? "openai") === "openai",
-          )}
+          providers={providers.data.providers.filter((provider) => provider.enabled && provider.kind !== "dataforseo")}
           refresh={list.refresh}
           onClose={close}
         />

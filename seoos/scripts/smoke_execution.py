@@ -153,14 +153,14 @@ def exercise(base, token, fixture, other_owner):
     assert receipts["indexnow"]["http_status"] == 202 and receipts["indexnow"]["status"] == "pending_key_validation"
     assert receipts["bing"]["http_status"] == 200
     usage = {item["connection_id"]: item["requests"] for item in rows(base, token, "usage", site)}
-    assert usage == {gsc: 7, ga4: 4, bing: 8, indexnow: 2}, usage
+    assert usage == {gsc: 8, ga4: 4, bing: 8, indexnow: 2}, usage
     assert len(fixture.requests) == sum(usage.values())
     for kind in ("gsc", "ga4"):
         assert fixture.counters[f"oauth_{kind}_authorization_code"] == 1
         assert fixture.counters[f"oauth_{kind}_refresh_token"] == 1
     assert fixture.calls[("api.indexnow.org", "POST", "/indexnow")] == 1
     print("PASS: Google OAuth, two-page GSC import, GA4 organic report, Bing report and submission, "
-          "URL inspection evidence, IndexNow replay protection, site/organization isolation, and 21 metered local requests")
+          "URL inspection evidence, IndexNow replay protection, site/organization isolation, and 22 metered local requests")
     retry_indexnow(base, token, fixture, site, indexnow)
     return site
 
@@ -174,7 +174,7 @@ def retry_indexnow(base, token, fixture, site, connection):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             receipts = rows(base, token, "submissions", site)
-            failed = next((item for item in receipts if item["job_id"] == job["id"]), None)
+            failed = next((item for item in receipts if item["job_id"] == job["id"] and item["status"] == "failed"), None)
             if failed:
                 break
             time.sleep(0.1)
@@ -203,7 +203,7 @@ def retry_indexnow(base, token, fixture, site, connection):
     assert failure_event["id"] < retry_event["id"] < actions["job.succeed"]["id"]
 
     usage = {item["connection_id"]: item["requests"] for item in rows(base, token, "usage", site)}
-    assert usage[connection] == 6 and sum(usage.values()) == len(fixture.requests) == 25
+    assert usage[connection] == 6 and sum(usage.values()) == len(fixture.requests) == 26
     assert fixture.calls[("api.indexnow.org", "POST", "/indexnow")] == 3
     assert fixture.calls[(HOST, "GET", "/" + INDEXNOW_KEY + ".txt")] == 3
     print(f"PASS: IndexNow HTTP 429 → 200 after {elapsed:.2f}s (Retry-After: {INDEXNOW_RETRY_AFTER}s), "
@@ -215,6 +215,42 @@ def assert_retry_receipt(base, token, site):
     record, = [item for item in rows(base, token, "index", site) if item["url"] == INDEXNOW_RETRY_PAGE]
     assert receipt["http_status"] == 200 and receipt["status"] == "accepted"
     assert record["provider"] == "indexnow" and record["status"] == "SUBMITTED" and record["evidence"] == "accepted"
+
+
+def gsc_resume_after_restart(dsn, org, token, fixture, process, base, site):
+    from datetime import date, timedelta
+    first = (date.fromisoformat(REPORT_DAY) - timedelta(days=2)).isoformat()
+    second = (date.fromisoformat(REPORT_DAY) - timedelta(days=1)).isoformat()
+    fixture.fail_gsc_page_once(second, 1000)
+    connection = next(item["id"] for item in rows(base, token, "connections", site) if item["kind"] == "gsc")
+    job = checked(base, EXECUTION + "/jobs", token, "POST", {
+        "site_id": site, "connection_id": connection, "kind": "gsc_sync",
+        "idempotency_key": "phase4a-gsc-checkpoint", "from": first, "to": second,
+    }, expected=201)["job"]
+    try:
+        for _ in range(100):
+            status = checked(base, API + "/jobs/" + job["id"], token)["job"]
+            if status["state"] == "queued" and status["attempts"] == 1:
+                break
+            time.sleep(0.15)
+        else:
+            raise AssertionError("the injected GSC 503 did not cause a durable retry")
+        assert status["gsc_progress"]["complete_days"] == 1 and status["gsc_progress"]["pending_days"] == 1, status
+    finally:
+        smoke_test.stop(process)
+    process, base = smoke_test.start(dsn, org, token)
+    try:
+        job = wait_job(base, token, job["id"])
+        assert job["attempts"] == 2 and job["gsc_progress"]["complete_days"] == 2, job
+        pages = fixture.gsc_pages
+        for day in (first, second):
+            assert pages[(day, 0, True)] == 1 and pages[(day, 0, False)] == 1, pages
+        assert pages[(first, 1000, False)] == 1 and pages[(second, 1000, False)] == 2, pages
+        snapshots = rows(base, token, "snapshots", site, connection_id=connection, **{"from": first, "to": second})
+        assert {item["date"] for item in snapshots if item["state"] == "complete"} == {first, second}
+    finally:
+        smoke_test.stop(process)
+    print("PASS: GSC two-day window resumes a failed second page after service restart without replaying successful calls")
 
 
 def main():
@@ -241,10 +277,12 @@ def main():
             assert stored[0]["values"]["sessions"] == 17
             assert len(rows(base, token, "submissions", site)) == 3
             assert_retry_receipt(base, token, site)
-            assert len(fixture.requests) == 25
-        finally:
+            assert len(fixture.requests) == 26
+        except BaseException:
             smoke_test.stop(process)
-    print("PASS: metrics and submission receipts survive an application restart")
+            raise
+        print("PASS: metrics and submission receipts survive an application restart")
+        gsc_resume_after_restart(dsn, org, token, fixture, process, base, site)
 
 
 if __name__ == "__main__":

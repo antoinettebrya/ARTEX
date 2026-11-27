@@ -112,6 +112,23 @@ function useSiteDirectory() {
 }
 
 type SiteScope = ReturnType<typeof useSiteDirectory>;
+
+export function siteScopeParams(scope: SiteScope) {
+  const [groupCountry, groupLanguage] = scope.group?.split(":") ?? [];
+  if (
+    (scope.country && groupCountry && scope.country !== groupCountry) ||
+    (scope.language && groupLanguage && scope.language !== groupLanguage)
+  )
+    return null;
+  const params = new URLSearchParams();
+  if (scope.requestedSite) params.set("site_id", scope.requestedSite);
+  const country = scope.country ?? groupCountry;
+  const language = scope.language ?? groupLanguage;
+  if (country) params.set("site_country", country);
+  if (language) params.set("site_language", language);
+  return params;
+}
+
 const ScopeContext = createContext<SiteScope | null>(null);
 
 export function SeoSiteProvider({ children }: { children: ReactNode }) {

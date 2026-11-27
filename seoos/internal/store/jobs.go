@@ -112,11 +112,8 @@ func (s *Store) enqueueJob(ctx context.Context, orgID string, input domain.JobIn
 			WHERE organization_id = $1 AND id = $2`, orgID, input.ProviderID).Scan(&enabled, &kind); err != nil {
 			return domain.Job{}, false, classifyError(err)
 		}
-		expected := domain.ProviderOpenAI
-		if domain.UsesDataProvider(input.Kind) {
-			expected = domain.ProviderDataForSEO
-		}
-		if content != nil && !domain.IsModelProvider(kind) || content == nil && kind != expected {
+		data := domain.UsesDataProvider(input.Kind)
+		if data && kind != domain.ProviderDataForSEO || !data && !domain.IsModelProvider(kind) {
 			return domain.Job{}, false, &domain.ValidationError{Field: "provider_id", Message: "provider type does not serve this job"}
 		}
 		if !enabled {
@@ -158,19 +155,42 @@ func (s *Store) GetJob(ctx context.Context, orgID, jobID string) (domain.Job, er
 	if !domain.ValidID(jobID) {
 		return domain.Job{}, domain.ErrNotFound
 	}
-	return scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+`
+	job, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+`
 		FROM public.seo_jobs WHERE organization_id = $1 AND id = $2`, orgID, jobID))
+	if err == nil && job.Kind == domain.ExecGSCSync {
+		var progress domain.GSCProgress
+		progress, err = s.GSCProgress(ctx, orgID, jobID)
+		if err == nil && progress.From != "" {
+			job.GSCProgress = &progress
+		}
+	}
+	return job, err
 }
 
-func (s *Store) ListJobs(ctx context.Context, orgID string, limit, offset int) ([]domain.Job, error) {
+func (s *Store) ListJobs(ctx context.Context, orgID string, limit, offset int, filters ...domain.JobFilter) ([]domain.Job, error) {
 	if err := validateOrganizationID(orgID); err != nil {
 		return nil, err
 	}
 	if err := domain.ValidatePage(limit, offset); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM public.seo_jobs
-		WHERE organization_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, orgID, limit, offset)
+	var f domain.JobFilter
+	if len(filters) > 0 {
+		f = filters[0]
+	}
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM public.seo_jobs j
+		WHERE organization_id=$1 AND ($4='' OR site_id=NULLIF($4,'')::uuid)
+		AND ($5='' OR state=$5) AND ($6='' OR kind=$6)
+		AND ($7='' OR (created_at >= (NULLIF($7,'')::date::timestamp AT TIME ZONE 'UTC')
+		  AND created_at < ((NULLIF($7,'')::date + 1)::timestamp AT TIME ZONE 'UTC')))
+		AND (($8='' AND $9='') OR EXISTS (SELECT 1 FROM public.seo_sites s
+		  WHERE (s.organization_id,s.id)=(j.organization_id,j.site_id)
+		  AND ($8='' OR s.country_code=$8) AND ($9='' OR s.language_tag=$9)))
+		ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, orgID, limit, offset,
+		f.SiteID, f.State, f.Kind, f.Day, f.Country, f.Language)
 	if err != nil {
 		return nil, err
 	}

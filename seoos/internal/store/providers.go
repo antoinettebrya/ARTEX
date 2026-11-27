@@ -280,7 +280,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease, req
 	if err != nil {
 		return domain.ProviderCall{}, err
 	}
-	if !provider.Enabled || provider.Kind != domain.ProviderOpenAI {
+	if !provider.Enabled || !domain.IsModelProvider(provider.Kind) {
 		return domain.ProviderCall{}, domain.ErrProviderDisabled
 	}
 	var priorState string
@@ -327,7 +327,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease, req
 	if err != nil {
 		return domain.ProviderCall{}, domain.ErrProviderNotConfigured
 	}
-	call := domain.ProviderCall{Provider: provider, APIKey: string(key)}
+	call := domain.ProviderCall{ID: lease.Token, Provider: provider, APIKey: string(key)}
 	var pricing []byte
 	err = tx.QueryRowContext(ctx, `SELECT data FROM public.seo_content_model_profiles WHERE organization_id=$1 AND provider_id=$2`,
 		job.OrganizationID, provider.ID).Scan(&pricing)
@@ -341,7 +341,7 @@ func (s *Store) ReserveProviderCall(ctx context.Context, lease domain.Lease, req
 	if call.Pricing != nil {
 		forecast := int64(512)
 		if len(requests) != 0 {
-			forecast, err = contentmodel.EstimateInputTokens(requests[0], provider, *call.Pricing)
+			forecast, err = contentmodel.EstimateInputTokens(requests[0], call.ModelReservation().Provider, *call.Pricing)
 			if err != nil {
 				return domain.ProviderCall{}, &domain.DataError{Code: "content_model_invalid_request", KnownUnbilled: true}
 			}

@@ -63,12 +63,22 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 				sources = append(sources, `SELECT data || jsonb_build_object('connection_id',connection_id,'kind','`+kind+`') AS value,
 					observed_at AS sort_time FROM public.seo_`+kind+`_properties `+filter)
 			} else {
-				sources = append(sources, `SELECT data || jsonb_build_object('connection_id',connection_id,'kind','`+kind+`') AS value,
-					day::timestamp AS sort_time FROM public.seo_`+kind+`_daily_metrics `+filter+
+				table := `public.seo_` + kind + `_daily_metrics`
+				extra := ""
+				if kind == domain.ExecutionGSC {
+					// Rows are swapped only on a complete or explicitly truncated day.
+					// A newer failed attempt makes old detail unavailable.
+					extra = `AND coalesce((SELECT snap.state IN ('complete','truncated') AND snap.connection_version=c.version
+						FROM public.seo_gsc_daily_snapshots snap JOIN public.seo_cms_connections c ON c.id=snap.connection_id
+						WHERE (snap.organization_id,snap.site_id,snap.connection_id,snap.day)=(m.organization_id,m.site_id,m.connection_id,m.day)
+						AND snap.state<>'pending' ORDER BY snap.started_at DESC,snap.job_id DESC LIMIT 1),true) `
+				}
+				sources = append(sources, `SELECT data || jsonb_build_object('connection_id',connection_id,'kind','`+kind+`','observed_at',observed_at) AS value,
+					day::timestamp AS sort_time FROM `+table+` m `+filter+
 					`AND (NULLIF($6,'') IS NULL OR day>=NULLIF($6,'')::date)
 					AND (NULLIF($7,'') IS NULL OR day<=NULLIF($7,'')::date)
 					AND (NULLIF($8,'') IS NULL OR data->>'page'=$8)
-					AND (NULLIF($9,'') IS NULL OR lower(data->>'country')=lower($9)) `)
+					AND (NULLIF($9,'') IS NULL OR lower(data->>'country')=lower($9)) `+extra)
 			}
 		}
 		if len(sources) == 0 {
@@ -79,8 +89,23 @@ func (s *Store) ExecutionRows(ctx context.Context, org, section string, f domain
 		if section == "metrics" {
 			args = append(args, f.From, f.To, f.Page, f.Country)
 		}
+	case "snapshots":
+		query = `SELECT jsonb_build_object('provider','gsc','date',snap.day,'site_id',snap.site_id,
+			'connection_id',snap.connection_id,'job_id',snap.job_id,'state',snap.state,
+			'rows',snap.rows_collected,'error_code',snap.error_code,'observed_at',snap.observed_at,
+			'totals_state',CASE WHEN snap.totals IS NOT NULL THEN 'observed' ELSE 'unknown' END,
+			'totals',snap.totals) FROM (
+				SELECT DISTINCT ON (d.day,d.connection_id) d.* FROM public.seo_gsc_daily_snapshots d
+				JOIN public.seo_cms_connections c ON (c.organization_id,c.site_id,c.id,c.version)=
+					(d.organization_id,d.site_id,d.connection_id,d.connection_version)
+				WHERE d.organization_id=$1 AND d.site_id=$2 AND ($5='' OR d.connection_id=NULLIF($5,'')::uuid)
+				AND ($6='' OR d.day>=NULLIF($6,'')::date) AND ($7='' OR d.day<=NULLIF($7,'')::date)
+				ORDER BY d.day,d.connection_id,d.started_at DESC,d.job_id DESC
+			) snap ORDER BY snap.day DESC,snap.connection_id`
+		args = append(args, f.ConnectionID, f.From, f.To)
 	case "index":
-		query = `SELECT data FROM public.seo_indexing_records ` + core + `ORDER BY observed_at DESC,url_hash,provider`
+		query = `SELECT data FROM public.seo_indexing_records ` + core + `AND ($5='' OR provider=$5) ORDER BY observed_at DESC,url_hash,provider`
+		args = append(args, f.Kind)
 	case "submissions":
 		query = `SELECT data || jsonb_build_object('job_id',job_id,'provider',provider,'created_at',created_at)
 			FROM public.seo_indexing_submissions ` + core + `ORDER BY created_at DESC,job_id`

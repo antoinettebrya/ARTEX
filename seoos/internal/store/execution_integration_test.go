@@ -224,7 +224,7 @@ func TestPostgresExecutionPublicationApprovalAndRecoveredWriteIntent(t *testing.
 	if err = s.MarkExecutionWrite(ctx, recovered, work, nil); !errors.Is(err, domain.ErrExecutionState) {
 		t.Fatalf("recovery started a second mutation: %v", err)
 	}
-	cms := domain.CMSPage{ID: "123", Status: "draft", Resource: "post", Title: "Test", Body: "<p>Text</p>",
+	cms := domain.CMSPage{ID: "123", Status: "draft", Resource: "post", Slug: "care", Title: "Test", Body: "<p>Text</p>",
 		URL: site.BaseURL + "/care", Raw: json.RawMessage(`{"content":"private authenticated receipt"}`)}
 	data, err := s.CompletePublication(ctx, recovered, work, domain.PublicationDraft, "", &cms, nil)
 	if err != nil {
@@ -256,6 +256,14 @@ func TestPostgresExecutionPublicationApprovalAndRecoveredWriteIntent(t *testing.
 	publishWork, err := s.ExecutionJob(ctx, publishLease)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err = s.MarkExecutionWrite(ctx, publishLease, publishWork, nil); err == nil {
+		t.Fatal("publish proceeded without a restorable before snapshot")
+	}
+	beforeWrongID := cms
+	beforeWrongID.ID = "other"
+	if err = s.MarkExecutionWrite(ctx, publishLease, publishWork, &beforeWrongID); err == nil {
+		t.Fatal("publish accepted another remote object's backup")
 	}
 	if err = s.MarkExecutionWrite(ctx, publishLease, publishWork, &cms); err != nil {
 		t.Fatal(err)

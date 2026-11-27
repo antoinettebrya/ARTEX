@@ -22,7 +22,7 @@ import (
 	"github.com/Autumn-27/artex/seoos/internal/worker"
 )
 
-const usage = "Usage: seoos [serve|api|worker|migrate|health|provision-org NAME OWNER_EMAIL]"
+const usage = "Usage: seoos [serve|api|worker|migrate|health|worker-health|provision-org NAME OWNER_EMAIL]"
 
 func main() {
 	if err := run(); err != nil {
@@ -42,7 +42,7 @@ func run() error {
 		return nil
 	}
 	switch command {
-	case "serve", "api", "worker", "migrate", "health":
+	case "serve", "api", "worker", "migrate", "health", "worker-health":
 		if len(os.Args) > 2 {
 			return errors.New(usage)
 		}
@@ -55,6 +55,9 @@ func run() error {
 	}
 	if command == "health" {
 		return readinessProbe(os.Getenv("SEOOS_ADDR"))
+	}
+	if command == "worker-health" {
+		return workerHealth(workerHeartbeatPath(), time.Now())
 	}
 	load := config.Load
 	if command == "worker" {
@@ -121,7 +124,9 @@ func run() error {
 		}
 		if command == "worker" {
 			slog.Info("SEO worker starting")
-			worker.Run(ctx, repo, researchProvider, content, execution)
+			path := workerHeartbeatPath()
+			defer os.Remove(path)
+			worker.RunWithHeartbeat(ctx, repo, researchProvider, content, execution, heartbeatWriter(path))
 			return nil
 		}
 		workerDone := make(chan struct{})

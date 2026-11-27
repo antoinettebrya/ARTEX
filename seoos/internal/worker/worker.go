@@ -27,13 +27,21 @@ type briefing interface {
 // Run polls PostgreSQL as the master dispatcher. Lease recovery also works
 // when multiple service processes are running against the same database.
 func Run(ctx context.Context, repo repository, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices) {
-	run(ctx, repo, openAI{models: contentmodel.New(nil)}, provider, content, execution)
+	RunWithHeartbeat(ctx, repo, provider, content, execution, nil)
 }
 
-func run(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices) {
+func RunWithHeartbeat(ctx context.Context, repo repository, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices, heartbeat func()) {
+	models := contentmodel.New(nil)
+	if content != nil && content.Models != nil {
+		models = content.Models
+	}
+	run(ctx, repo, openAI{models: models}, provider, content, execution, heartbeat)
+}
+
+func run(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices, heartbeat func()) {
 	ctx = domain.WithPrincipal(ctx, domain.Principal{Kind: "worker"})
 	for ctx.Err() == nil {
-		found, err := runOnce(ctx, repo, briefs, provider, content, execution)
+		found, err := runOnce(ctx, repo, briefs, provider, content, execution, heartbeat)
 		if err == nil && found {
 			continue
 		}
@@ -49,10 +57,13 @@ func run(ctx context.Context, repo repository, briefs briefing, provider domain.
 	}
 }
 
-func runOnce(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices) (bool, error) {
+func runOnce(ctx context.Context, repo repository, briefs briefing, provider domain.SEODataProvider, content *ContentServices, execution *ExecutionServices, heartbeat ...func()) (bool, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	lease, err := repo.ClaimJob(claimCtx)
 	cancel()
+	if err == nil && len(heartbeat) != 0 && heartbeat[0] != nil {
+		heartbeat[0]()
+	}
 	if err != nil || lease == nil {
 		return false, err
 	}

@@ -254,12 +254,22 @@ class ExecutionHandler(BaseHTTPRequestHandler):
             data = self.read_json()
             dimensions = ("date", "page", "query", "country", "device")
             scope = data["dimensionFilterGroups"][0]["filters"][0]
-            if (tuple(data.get("dimensions", ())) != dimensions or data.get("dataState") != "final" or
+            selected = tuple(data.get("dimensions", ()))
+            if (selected not in (dimensions, ("date",)) or data.get("dataState") != "final" or
                     scope["dimension"] != "page" or HOST.replace(".", r"\.") not in scope["expression"]):
                 raise ValueError("incorrect GSC site filter or dimensions")
             start, limit, end = data["startRow"], data["rowLimit"], data["endDate"]
             if not 0 <= start <= 10000 or not 0 < limit <= 25000:
                 raise ValueError("invalid Search Analytics window")
+            with self.server.lock:
+                key = (end, start, selected == ("date",))
+                self.server.gsc_pages[key] += 1
+                fail_page = self.server.gsc_failure == key and self.server.gsc_pages[key] == 1
+            if fail_page:
+                return self.respond_json(503, {"error": {"status": "UNAVAILABLE"}})
+            if selected == ("date",):
+                rows = [{"keys": [end], "clicks": 12012, "impressions": 84084, "ctr": 12 / 84, "position": 6.5}]
+                return self.respond_json(200, {"rows": rows, "responseAggregationType": "byPage"})
             rows = [
                 {"keys": [end, PAGE, f"phase4 organic query {n:04d}", "usa", "MOBILE"],
                  "clicks": 12, "impressions": 84, "ctr": 12 / 84, "position": 6.5}
@@ -404,6 +414,8 @@ class LocalExecution:
         self.server.lock = Lock()
         self.server.calls = Counter()
         self.server.counters = Counter()
+        self.server.gsc_pages = Counter()
+        self.server.gsc_failure = None
         self.server.requests = []
         self.server.indexnow_retry_times = []
         self.server.indexnow_retry_gate = Event()
@@ -438,6 +450,15 @@ class LocalExecution:
     def indexnow_retry_times(self):
         with self.server.lock:
             return tuple(self.server.indexnow_retry_times)
+
+    def fail_gsc_page_once(self, day, offset):
+        with self.server.lock:
+            self.server.gsc_failure = (day, offset, False)
+
+    @property
+    def gsc_pages(self):
+        with self.server.lock:
+            return self.server.gsc_pages.copy()
 
     def allow_indexnow_retry(self):
         self.server.indexnow_retry_gate.set()

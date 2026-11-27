@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { Download, Plus, Save, Trash2 } from "lucide-react";
 
@@ -24,7 +24,8 @@ import {
   safeHTTPLink,
 } from "@/lib/seo/content";
 
-import { Field, field, formatTime } from "../shared";
+import { useSeoSession } from "../session";
+import { ConfirmChange, Field, field, formatTime } from "../shared";
 
 export type SubmitContent = (action: ContentAction) => Promise<void>;
 
@@ -277,9 +278,92 @@ function editableSections(sections: ArticleSection[] | null): DraftSection[] {
   }));
 }
 
-export function ArticleEditor({ article, onSave }: { article: ContentArticle; onSave: SubmitContent }) {
-  const { commit, saving, error } = useContentSubmit(onSave);
-  const [sections, setSections] = useState(() => editableSections(article.sections));
+type SavedArticleDraft = { version: number; fields: Record<string, string>; sections: DraftSection[] };
+const inTabDrafts = new Map<string, SavedArticleDraft>();
+
+function readArticleDraft(key: string): SavedArticleDraft | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (raw) return JSON.parse(raw) as SavedArticleDraft;
+  } catch {
+    // A tab with storage disabled still keeps the draft during client navigation.
+  }
+  return inTabDrafts.get(key);
+}
+
+function dropArticleDraft(key: string) {
+  inTabDrafts.delete(key);
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // The in-memory fallback has already been removed.
+  }
+}
+
+export function ArticleEditor({
+  article,
+  articleVersion,
+  siteId,
+  projectId,
+  onSave,
+}: {
+  article: ContentArticle;
+  articleVersion: number;
+  siteId: string;
+  projectId: string;
+  onSave: SubmitContent;
+}) {
+  const { principal } = useSeoSession();
+  const key = `artex:article-draft:${principal.organization_id}:${principal.user_id ?? principal.email ?? "session"}:${siteId}:${projectId}`;
+  const [original] = useState<SavedArticleDraft>(() => ({
+    version: articleVersion,
+    sections: editableSections(article.sections),
+    fields: Object.fromEntries([
+      ...metadata.map(([name]) => [name, article[name] ?? ""]),
+      ...seoLists.map(([name]) => [name, article[name]?.join("\n") ?? ""]),
+      ["description", article.description],
+    ]),
+  }));
+  const [draft, setDraft] = useState(() => readArticleDraft(key) ?? original);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [persisted, setPersisted] = useState(true);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
+  const stale = draft.version !== articleVersion;
+  let draftNotice = "文章有未保存的修改，可在此标签页返回恢复。";
+  if (!persisted) draftNotice = "文章有未保存的修改。浏览器禁用了草稿存储，请先保存再刷新或关闭。";
+  if (stale) draftNotice = `本地草稿基于文章 V${draft.version}，服务器当前为 V${articleVersion}。请核对版本后再继续。`;
+
+  const { commit, saving, error } = useContentSubmit(async (action) => {
+    await onSave(action);
+    dropArticleDraft(key);
+  });
+  const sections = draft.sections;
+
+  useEffect(() => {
+    if (!dirty) return;
+    inTabDrafts.set(key, draft);
+    try {
+      sessionStorage.setItem(key, JSON.stringify(draft));
+      setPersisted(true);
+    } catch {
+      setPersisted(false);
+    }
+    function confirmUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", confirmUnload);
+    return () => window.removeEventListener("beforeunload", confirmUnload);
+  }, [dirty, draft, key]);
+
+  function setSections(update: (rows: DraftSection[]) => DraftSection[]) {
+    setDraft((current) => ({ ...current, sections: update(current.sections) }));
+  }
+
+  function setField(name: string, value: string) {
+    setDraft((current) => ({ ...current, fields: { ...current.fields, [name]: value } }));
+  }
 
   function patch(key: string, change: Partial<DraftSection>) {
     setSections((rows) => rows.map((row) => (row.key === key ? { ...row, ...change } : row)));
@@ -287,7 +371,7 @@ export function ArticleEditor({ article, onSave }: { article: ContentArticle; on
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const values = new FormData(event.currentTarget);
+    if (stale) return;
     const changed = {
       ...article,
       sections: sections.map(({ key: _key, claims, ...rest }) => ({
@@ -295,15 +379,46 @@ export function ArticleEditor({ article, onSave }: { article: ContentArticle; on
         heading: rest.heading.trim(),
         claims: claims.map(({ text, fact_ids }) => ({ text: text.trim(), fact_ids })),
       })),
-      description: field(values, "description").trim(),
+      description: draft.fields.description.trim(),
     };
-    for (const [key] of metadata) changed[key] = field(values, key).trim();
-    for (const [key] of seoLists) changed[key] = contentLines(field(values, key));
+    for (const [name] of metadata) changed[name] = draft.fields[name].trim();
+    for (const [name] of seoLists) changed[name] = contentLines(draft.fields[name]);
     void commit({ action: "save_article", article: changed });
   }
 
   return (
     <form className="grid min-w-0 gap-3" onSubmit={submit}>
+      {dirty && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span role="status">{draftNotice}</span>
+            {stale && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setDraft((item) => ({ ...item, version: articleVersion }))}
+              >
+                采用草稿进行合并
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => setConfirmDiscard(true)}>
+              丢弃本地草稿
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {confirmDiscard && (
+        <ConfirmChange
+          title="丢弃本地草稿"
+          description="删除当前标签页里的未保存修改并重新显示服务器版本。"
+          onClose={() => setConfirmDiscard(false)}
+          onConfirm={async () => {
+            dropArticleDraft(key);
+            setDraft(original);
+          }}
+        />
+      )}
       <Card className="gap-3 py-3">
         <CardHeader className="px-3">
           <CardTitle>文章与 SEO</CardTitle>
@@ -315,7 +430,8 @@ export function ArticleEditor({ article, onSave }: { article: ContentArticle; on
                 <Input
                   id={`content-article-${name}`}
                   name={name}
-                  defaultValue={article[name]}
+                  value={draft.fields[name]}
+                  onChange={(event) => setField(name, event.target.value)}
                   maxLength={articleMetaLength[name]}
                   type={name === "canonical" ? "url" : "text"}
                   required={name === "title" || name === "h1"}
@@ -328,13 +444,20 @@ export function ArticleEditor({ article, onSave }: { article: ContentArticle; on
                   id="content-article-description"
                   name="description"
                   rows={2}
-                  defaultValue={article.description}
+                  value={draft.fields.description}
+                  onChange={(event) => setField("description", event.target.value)}
                 />
               </Field>
             </div>
             {seoLists.map(([key, label]) => (
               <Field id={`content-article-${key}`} label={`${label}（每行一项）`} key={key}>
-                <Textarea id={`content-article-${key}`} name={key} rows={2} defaultValue={article[key]?.join("\n")} />
+                <Textarea
+                  id={`content-article-${key}`}
+                  name={key}
+                  rows={2}
+                  value={draft.fields[key]}
+                  onChange={(event) => setField(key, event.target.value)}
+                />
               </Field>
             ))}
           </fieldset>
@@ -475,7 +598,7 @@ export function ArticleEditor({ article, onSave }: { article: ContentArticle; on
         >
           <Plus /> 添加章节
         </Button>
-        <Button size="sm" type="submit" disabled={saving || !sections.length}>
+        <Button size="sm" type="submit" disabled={saving || stale || !sections.length}>
           {saving ? <Spinner /> : <Save />} 保存文章版本
         </Button>
       </div>

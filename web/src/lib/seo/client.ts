@@ -25,6 +25,15 @@ export type Job = {
   updated_at: string;
   error_code?: string;
   result?: unknown;
+  gsc_progress?: {
+    from: string;
+    to: string;
+    pending_days: number;
+    complete_days: number;
+    truncated_days: number;
+    failed_days: number;
+    rows: number;
+  };
 };
 export type ProviderKind = "openai" | "anthropic" | "gemini" | "deepseek" | "openai_compatible" | "dataforseo";
 export type ModelOptions = {
